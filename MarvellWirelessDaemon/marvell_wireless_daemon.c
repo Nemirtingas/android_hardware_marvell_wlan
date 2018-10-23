@@ -105,6 +105,11 @@ union POWER_SD8XXX
 } power_sd8xxx;
 
 //Static paths and args
+// Path define for 8777
+static const char* WIFI_DRIVER_MODULE_8777_REGION_ALPHA_CONF = "/system/etc/firmware/mrvl/reg_alpha2";
+static const char* WIFI_DRIVER_MODULE_8777_REGION_ALPHA_PARAM = "/sys/module/sd8777/parameters/reg_alpha2";
+static const char* WIFI_DRIVER_MODULE_8777_MAC_INFO = "/efs/wifi/.mac.info";
+
 // Path define for 8686
 static const char* WIFI_DRIVER_MODULE_8686_1_PATH = "/system/lib/modules/libertas.ko";
 static const char* WIFI_DRIVER_MODULE_8686_1_NAME = "libertas";
@@ -202,6 +207,91 @@ void android_set_aid_and_cap() {
     return;
 }
 
+int write_param(const char* filepath, const char* param)
+{
+    int fd;
+    int len;
+    int sent;
+
+    if( filepath )
+    {
+        while( 1 )
+        {
+            fd = open(filepath, 1);
+            if( fd != -1 )
+                break;
+
+            if( errno != EINTR )
+            {
+                ALOGE("Failed to open: %s (%s) %d", filepath, strerror(errno), errno);
+                return -1;
+            }
+        }
+
+        len = strlen(param) + 1;
+        do
+        {
+            sent = write(fd, param, len);
+            if( sent != -1 )
+                break;
+        }
+        while( errno == EINTR );
+        close(fd);
+        if( sent != len )
+        {
+            ALOGE("Failed to write param: %s (%s) %d", param, strerro(errno), errno);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int read_region_alpha(const char* filepath, char *region)
+{
+    FILE* file;
+    int len;
+    int res = 0;
+
+    file = fopen(filepath);
+    if( file )
+    {
+        len = fread(region, 1, 2, file);
+        if( len >= 0 )
+        {
+            if( len == 2 )
+            {
+                region[2] = 0;
+                ALOGD("Read reg_alpha2 %s\n", region);
+                res = 1;
+            }
+            else
+            {
+                ALOGE("read (%s) unexpected reg_alpha2 size %d", filepath, len);
+            }
+        }
+        else
+        {
+            ALOGE("read (%s) failed: %s (%d)", filepath, strerror(errno), errno);
+        }
+        fclose(file);
+        return res;
+    }
+    ALOGE("open (%s) failed: %s (%d)", filepath, strerror(errno), errno);
+    return 0;
+}
+
+void firmware_setup()
+{
+    static int need_mac_setup = 1;
+
+    char region[20];
+    if( need_mac_setup )
+    {
+        if( read_region_alpha(WIFI_DRIVER_MODULE_8777_REGION_ALPHA_CONF, region) )
+            write_param(WIFI_DRIVER_MODULE_8777_REGION_ALPHA_CONF, region);
+    }
+}
+
 //Daemon entry 
 int main(void)
 {
@@ -222,6 +312,8 @@ int main(void)
     signal(SIGPIPE,SIG_IGN);
 
     android_set_aid_and_cap();
+
+    firmware_setup();
 
     listenfd = serv_listen (WIRELESS_UNIX_SOCKET_DIR);
     if (listenfd < 0) 
