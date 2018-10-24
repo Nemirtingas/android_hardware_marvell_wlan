@@ -141,12 +141,66 @@ static const char* BT_DRIVER_DEV_NAME    = "/dev/mbtchar0";
 static const char* FM_DRIVER_DEV_NAME    = "/dev/mfmchar0";
 static const char* NFC_DRIVER_DEV_NAME   = "/dev/mnfcchar0";
 
+struct 
+
+#define SDIO_DEVICE_PATH = "/sys/bus/sdio/devices/mmc2:0001:1/device";
+
 enum
 {
     WIFI_DRIVER_IFAC_INDEX,
     BT_DRIVER_DEV_INDEX,
     FM_DRIVER_DEV_INDEX,
     NFC_DRIVER_DEV_INDEX
+};
+
+enum
+{
+	TYPE_SD8777,
+	TYPE_SD8787,
+	TYPE_SD8887,
+	TYPE_SD8897,
+	TYPE_SD8xxx,
+};
+
+enum
+{
+	CARD_ID_SD8777 = 0x9131,
+	CARD_ID_SD8787 = 0x9119,
+	CARD_ID_SD8887 = 0x9135,
+	CARD_ID_SD8897 = 0x912D,
+	CARD_ID_SD8xxx = 0xFFFF,
+};
+
+struct sdio_type_t
+{
+	int index;
+	int id;
+	const char* name;
+} sdio_types[] = {
+	{TYPE_SD8777, CARD_ID_SD8777, "8777"},
+	{TYPE_SD8787, CARD_ID_SD8787, "8787"},
+	{TYPE_SD8887, CARD_ID_SD8887, "8887"},
+	{TYPE_SD8897, CARD_ID_SD8897, "8897"},
+	{TYPE_SD8xxx, CARD_ID_SD8xxx, "8xxx"},
+};
+
+struct driver_debug_t
+{
+	int index;
+	const char *status;
+	const char *config;
+} drivers_debug[] = {
+	{0, "/proc/mwlan/wlan0/info"    , "/proc/mwlan/wlan0/debug"   },
+	{1, "/proc/mbt/mbtchar0/status" , "/proc/mbt/mbtchar0/config" },
+	{2, "/proc/mbt/mfmchar0/status" , "/proc/mbt/mfmchar0/config" },
+	{3, "/proc/mbt/mnfcchar0/status", "/proc/mbt/mnfcchar0/config"},
+};
+
+static const *char android_persist_prop[] = {
+	"persist.sys.wifi.driver.version",
+	"persist.sys.bt.driver.version",
+	"persist.sys.fm.driver.version",
+	"persist.sys.nfc.driver.version",
 };
 
 static const char* MRVL_PROP_WL_RECOVERY = "persist.sys.mrvl_wl_recovery";
@@ -158,11 +212,10 @@ static int debug = 1;
 #define MAC_ADDR_LENGTH 12
 #define VENDOR_PREFIX_LENGTH 6
 #define FMT_MAC_ADDR_LEN (MAC_ADDR_LENGTH+5)
-
+//                              u+r,   u+w,  u+x,  g+r,  g+w,  g+x,  u+r,  u+w,  u+x
 unsigned short right_masks[] = {0x100, 0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
 
-unsigned char hex_char[]={'0','1','2','3','4','5','6','7','8','9','A','B','C',
-'D','E','F'};
+unsigned char hex_char[]={'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
 //Marvell MAC prefix assigned by IEEE: 00:50:43
 const char *vendor_prefix = "00:50:43:00:00:00";
 const char* wifi_mac_path = "/NVM/wifi_addr";
@@ -354,22 +407,22 @@ int read_mac_from_cfg(char* mac_addr, const char *cfg_path)
     if (!fp)
     {
         ALOGE("open(%s) failed: %s (%d)", cfg_path, strerror(errno), errno);
-        goto out;
     }
-
-    memset(buf, 0, 1024);
-    fgets(buf, 1024, fp);
-    pos = buf;
-    if (strncmp(pos, "mac_addr", 8) == 0)
-    {
-        pos = strchr(pos, ':');
-        if (pos != NULL)
-        {
-            strncpy(mac_addr, pos+2, FMT_MAC_ADDR_LEN);
-        }
-    }
-
-    out:
+	else
+	{
+		memset(buf, 0, 1024);
+		fgets(buf, 1024, fp);
+		pos = buf;
+		if (strncmp(pos, "mac_addr", 8) == 0)
+		{
+			pos = strchr(pos, ':');
+			if (pos != NULL)
+			{
+				strncpy(mac_addr, pos+2, FMT_MAC_ADDR_LEN);
+			}
+		}
+	}
+		
     if (fp != NULL)
     {
         fclose(fp);
@@ -615,7 +668,7 @@ int cmd_handler(char* buffer, char* drive_card)
         return set_drv_arg();
     }
 
-    if (!strncmp(buffer, "BT_DRV_ARG ", strlen("BT_DRV_ARG")))
+    if (!strncmp(buffer, "BT_DRV_ARG ", strlen("BT_DRV_ARG ")))
     {
         /* Note: The ' ' before the arg is needed */
         return set_drv_arg();
@@ -886,6 +939,49 @@ err:
     return ret;
 }
 
+int kill_process_by_name(const char* ProcName)
+{
+    DIR             *dir = NULL;
+    struct dirent   *d = NULL;
+    int             pid = 0;
+    char comm[PATH_MAX+1];
+    /* Open the /proc directory. */
+    dir = opendir("/proc");
+    if (!dir)
+    {
+        printf("cannot open /proc");
+        return -1;
+    }
+    /* Walk through the directory. */
+    while ((d = readdir(dir)) != NULL)
+	{
+        /* See if this is a process */
+        if ((pid = atoi(d->d_name)) == 0) continue;
+        snprintf(comm, sizeof(comm), "/proc/%s/comm", d->d_name);
+        FILE *fp = fopen(comm, "r");
+        if (fp)
+		{
+            char line[1024];
+            char *pos = NULL;
+            while (fgets(line, sizeof(line), fp))
+			{
+                line[strlen(line)-1] = '\0';
+                if (strncmp(line, ProcName, strlen(ProcName)) == 0)
+				{
+                    ALOGI("Try to kill pid[%d][%s]\n", pid, ProcName);
+                    if (kill(pid, SIGKILL) != 0)
+					{
+                        ALOGE("Fail to kill pid[%d][%s], error[%s]\n", pid, ProcName, strerror(errno));
+                    }
+                }
+            }
+            fclose(fp);
+        }
+    }
+    closedir(dir);
+    return  0;
+}
+
 //to do: don’t use polling mode, use uevent, listen interface added uevent from driver
 int wait_interface_ready (int interface, int us_interval, int retry)
 {
@@ -938,6 +1034,12 @@ int wait_interface_ready (int interface, int us_interval, int retry)
     return -1;
 }
 
+int set_drv_arg()
+{
+	ALOGE("Driver is built into kernel, fail to set the arg!");
+	return -1;
+}
+
 int set_power(int on)
 {
     int res = 0;
@@ -963,7 +1065,52 @@ int set_power(int on)
     return res;
 }
 
-int bt_fm_nfc_disable(void)
+int mrvl_sd8xxx_force_poweroff()
+{
+	int ret = 0;
+	int v2; // r4
+	int *v3; // r0
+	char *v4; // r0
+	char buffer[92]; // [sp+8h] [bp-78h]
+
+	memset(buffer, 0, 92u);
+	property_get("persist.sys.mrvl_wl_recovery", buffer, "1");
+	if ( atoi(buffer) )
+	{
+		ALOGE("mrvl_sd8xxx_force_poweroff");
+		ret = system("echo 0 > /sys/devices/platform/sd8x-rfkill/pwr_ctrl");
+		if ( ret )
+		{
+			ALOGE("---------echo 0 > /sys/devices/platform/sd8x-rfkill/pwr_ctrl, ret: 0x%x, strerror: %s", ret, strerror(errno));
+		}
+		else
+		{
+			if ( power_sd8xxx.type.bt_on )
+			{
+				ALOGE("mrvl_sd8xxx_force_poweroff: kill BT");
+				kill_process_by_name("droid.bluetooth");
+			}
+			if ( power_sd8xxx.type.fm_on )
+			{
+				ALOGE("mrvl_sd8xxx_force_poweroff: kill FM");
+				kill_process_by_name("FMRadioServer");
+			}
+			if ( power_sd8xxx.type.nfc_on )
+			{
+				ALOGE("mrvl_sd8xxx_force_poweroff: kill NFC");
+				kill_process_by_name("com.android.nfc");
+			}
+		}
+	}
+	else
+	{
+		ALOGE("The recovery feature has been disabled, ignore the command: force power off!To enable it, please set the property: persist.sys.mrvl_wl_recovery");
+		ret = -1;
+	}
+	return ret;
+}
+
+int bt_fm_disable(void)
 {
     int res = 0;
     /* To speed up the recovery, detect the FW status here */
@@ -974,7 +1121,7 @@ int bt_fm_nfc_disable(void)
     return res;
 }
 
-int bt_fm_nfc_enable(void)
+int bt_fm_enable(void)
 {
     int ret = 0;
     char arg_buf[MAX_BUFFER_SIZE];
@@ -1098,7 +1245,7 @@ int bt_enable(void)
     power_sd8xxx.type.bt_on = TRUE;
     block_sigchld(SIG_BLOCK);
 
-    ret = bt_fm_nfc_enable();
+    ret = bt_fm_enable();
 
     if (ret < 0) {
         ALOGE("Fail to enable bt!");
@@ -1119,14 +1266,13 @@ out:
     return ret;
 }
 
-
 int bt_disable()
 {
     int ret;
 
     power_sd8xxx.type.bt_on = FALSE;
     block_sigchld(SIG_BLOCK);
-    ret = modem_disable();
+    ret = bt_fm_disable();
     block_sigchld(SIG_UNBLOCK);
 
     return ret;
@@ -1138,60 +1284,308 @@ int fm_enable(void)
     power_sd8xxx.type.fm_on = TRUE;
 
     ret = bt_fm_enable();
-    if(ret < 0) {
+    if(ret >= 0)
+	{
+		ret = wait_interface_ready(FM_DRIVER_DEV_INDEX, 200000, 40);
+		if(ret >= 0)
+		{
+			get_driver_version(2);
+			return ret;
+		}
+		ALOGE("Timeout to wait /dev/mfmchar0!");
+	}
+	else
+	{
         ALOGE("Fail to enable bt_fm!");
-        goto out;
-    }
-    ret = wait_interface_ready(FM_DRIVER_DEV_NAME, 200000, 10);
-    if(ret < 0)
-    {
-        ALOGE("Timeout to wait /dev/mfmchar0!");
-        goto out;
-    }
-out:
+	}
+	
+	power_sd8xxx.type.fm_on = FALSE;
+	
     return ret;
 }
 
 int fm_disable()
 {
-    int ret = 0;
     power_sd8xxx.type.fm_on = FALSE;
-    if(power_sd8xxx.type.bt_on == FALSE)
-    {
-        ret = bt_fm_disable();
-    }
-    return ret;
+    return bt_fm_disable;
 }
 
-int check_cfg_file(const char* cfg_path)
+int nfc_enable()
 {
-    int ret = 0;
+	int ret;
+	const char *v1; // r2
 
-    if (access(cfg_path, F_OK) == 0)
-    {
-        ret = 1;
-    }
-    else
-    {
-        system("tcmd-subcase.sh copy-wifi-bt-cfg");
-        if (access(cfg_path, F_OK) == 0)
-        {
-            ret = 1;
-        }
-    }
+	power_sd8xxx.type.nfc_on = TRUE;
 
-    return ret;
+	ret = bt_fm_enable();
+	if ( ret < 0 )
+	{
+		ALOGE("Fail to enable nfc!");
+		power_sd8xxx.type.nfc_on = FALSE;
+	}
+	else
+	{
+		ret = wait_interface_ready(NFC_DRIVER_DEV_INDEX, 200000, 40);
+		if ( ret < 0 )
+		{
+			ALOGE("Timeout to wait /dev/mnfcchar0!");
+			power_sd8xxx.type.nfc_on = FALSE;
+		}
+	}
+  return ret;
 }
 
+int nfc_disable()
+{
+	power_sd8xxx.type.nfc_on = FALSE;
+	return bt_fm_disable();
+}
 
+int get_wifi_state()
+{
+	FILE *file;
+	int ret;
+	char *substr;
+	char buffer[1024];
 
+	file = fopen("/proc/mwlan/wlan0/debug", "r");
+	if ( file == NULL )
+		return 0;
+	
+	while ( 1 )
+	{
+		substr = fgets(buffer, 1024, file);
+		if ( substr == NULL )
+		{
+			ret = 0;
+			break;
+		}
+		buffer[strnlen(buffer, 1024) - 1] = 0;
+		if ( !strncmp(buffer, "driver_state=", 13) )
+		{
+			ret = atoi(&buffer[13]);
+			break;
+		}
+	}
+	fclose(file);
+	
+	return ret;
+}
 
+int wifi_get_fwstate()
+{
+	int param;
+	char param_str[92];
+	
+	memset(param_str, 0, sizeof(param));
+	property_get(MRVL_PROP_WL_RECOVERY, param_str, "1");
+	param = atoi(param_str);
+	if( param )
+	{
+		return get_wifi_state();
+	}
+	ALOGE("The recovery feature has been disabled, ignore the command: wifi get fwstate!To enable it, please set the property:\n" MRVL_PROP_WL_RECOVERY);
+	return 0;
+}
 
+const char* read_driver_info(FILE *file, char *buffer, int type, int is_status_file)
+{
+	char *key;
+	const char* ret = NULL;
+	
+	// If its a 'status' file, then get the driver version
+	if( !is_status_file )
+	{
+		if( type == WIFI_DRIVER_IFAC_INDEX )
+			key = "driver_version";
+		else
+			key = "version";
+	}
+	// else get the debug info ?
+	else
+		key = "drvdbg";
+	
+	if( file )
+	{
+		if( buffer )
+		{
+			while( (ret = fgets(buffer, 1024, file)) )
+			{
+				if( (ret = strstr(buffer, key)) )
+				{
+					ALOGI("%s", ret);
+					break;
+				}
+				memset(buffer, 0, 4);
+			}
+			if( ret == NULL )
+				ALOGI("No driver info found");
+		}
+	}
+	
+	return ret;
+}
 
+void get_driver_version(int type)
+{
+	driver_debug_t *driver_debug_paths;
+	const char* driver_info_line;
+	char cmd[256];
+	char info[256];
+	char buffer[1024];
+	
+	FILE *file;
+	
+	memset(cmd, 0, sizeof(cmd));
+	memset(info, 0, sizeof(info));
+	memset(buffer, 0, sizeof(buffer));
+	if( type < TYPE_SD8xxx )
+	{
+		driver_debug_paths = drivers_debug[type];
+		if( strlen(driver_debug_paths->status) < 252 && strlen(driver_debug_paths->config) < 252 )
+		{
+			// Prepare to read status file
+			strncat(cmd, "cat ", 256);
+			strncat(cmd, driver_debug_paths->status, 256);
+			file = popen(cmd, "r");
+			if( file )
+			{
+				driver_info_line = read_driver_info(file, buffer, type, 0);
+				strncat(info, driver_info_line, 256);
+				fclose(file);
+				property_set(android_persist_prop[type], info);
+				
+				// Prepare to read config file
+				memset(buffer, 0, buffer);
+				memset(cmd, 0, sizeof(cmd));
+				strncat(cmd, "cat ", 256);
+				strncat(cmd, driver_debug_paths->config, 256);
+				file = popen(cmd, "r");
+				if( file )
+				{
+					driver_info_line = read_driver_info(file, buffer, type, 1);
+					strncat(info, driver_info_line, 256);
+					fclose(file);
+				}
+				else
+				{
+					ALOGE("%s config failed: %s (%d)", __func__, strerror(errno), errno);
+				}
+			}
+			else
+			{
+				ALOGE("%s status failed: %s (%d)", __func__, strerror(errno), errno);
+			}
+		}
+		else
+		{
+			ALOGE("Exceeded command buffer length, abort");
+		}
+	}
+	else
+	{
+		ALOGE("Invalid driver name index: %d", type);
+	}
+}
 
+int hex_to_int(const char *str)
+{
+	int ret = 0;
+	unsigned char c;
+	
+	if( str )
+	{
+		str+=2;
+		while( *str )
+		{
+			c = (unsigned char)*str;
+			// 'a' = 97
+			if( (c - 'a') <= 5 )
+			{
+				// 'W' = 87
+				c -= 87;
+			}
+			// 'A' = 65
+			else if( (c - 'A') <= 5 )
+			{
+				// '7' = 55
+				c -= 55;
+			}
+			// '0' = 48
+			else if( (c - '0') > 9 )
+			{
+				if( c != '\n' && c != '\r' )
+				{
+					ALOGE("Illegal hex number");
+					return -1;
+				}
+			}
+			else
+			{
+				// '0' = 48
+				c -= '0';
+			}
+			ret = c + 16 * ret;
+		}
+		return ret;
+	}
+	return -1;
+}
 
+int get_sdio_card_type(int x)
+{
+	char buffer[1024];
+	FILE* file;
+	int sdio_card_id;
+	
+	if( x == 1 )
+		return TYPE_SD8xxx;
+	
+	memset(buffer, 0, 1024);
+	file = popen("cat " SDIO_DEVICE_PATH, "r");
+	if( !file )
+	{
+		ALOGE("%s failed: %s (%d)", __func__, strerror(errno), errno);
+		return -1;
+	}
+	if( !fgets(buffer, 1024, file) )
+	{
+		ALOGI("nothing is read from %s", SDIO_DEVICE_PATH);
+		fclose(file);
+		return -1;
+	}
+	if( !strncmp("0x", buffer, 2) )
+		sdio_card_id = hex_to_int(buffer);
+	else
+		sdio_card_id = atoi(buffer);
+	
+	fclose(file);
+	ALOGI("sdio card id %lx", sdio_card_id);
+	
+	switch( sdio_card_id )
+	{
+		case CARD_ID_SD8777: return sdio_types[0].index;
+		case CARD_ID_SD8787: return sdio_types[1].index;
+		case CARD_ID_SD8887: return sdio_types[2].index;
+		case CARD_ID_SD8897: return sdio_types[3].index;
+		default            : return sdio_types[4].index;
+	}
+}
 
-
-
-
-
+int get_card_type(char *card_type)
+{
+	int type;
+	if( !power_sd8xxx.on )
+	{
+		ALOGE("failed to get card type: SDIO card is not powered up");
+		return -1;
+	}
+	type = get_sdio_card_type(0);
+	if( type >= TYPE_SD8xxx )
+	{
+		ALOGE("Unknown card type: %lu", type);
+		return -1;
+	}
+	sprintf(card_type, "%lu %s", type, sdio_types[type].name);
+	return 0;
+}
