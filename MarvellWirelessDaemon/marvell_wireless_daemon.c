@@ -113,8 +113,6 @@ static const char* WIFI_DRIVER_MODULE_8777_AUTO_DS_PARAM       = "/sys/module/sd
 static const char* WIFI_DRIVER_MODULE_8777_PS_MODE_PARAM       = "/sys/module/sd8777/parameters/ps_mode";
 static const char* WIFI_DRIVER_MODULE_8777_HW_TEST_PARAM       = "/sys/module/sd8777/parameters/hw_test";
 
-static const char* WIFI_DRIVER_IFAC_NAME =         "/sys/class/net/wlan0";
-
 static const char* WIFI_DRIVER_MODULE_REGION_ALPHA_CONF = "/system/etc/firmware/mrvl/reg_alpha2";
 static const char* WIFI_DRIVER_MODULE_MAC_INFO          = "/efs/wifi/.mac.info";
 static const char* WIFI_DRIVER_MODULE_PSM_INFO          = "/data/.psm.info";
@@ -131,7 +129,6 @@ static const char* BT_DRIVER_MODULE_INIT_CFG_PATH = "mrvl/bt_init_cfg.conf";
 static const char* BT_DRIVER_MODULE_INIT_CFG_STORE_PATH = "/data/misc/wireless/bt_init_cfg.conf";
 static const char* BT_DRIVER_MODULE_BT_ADDR = "/efs/bluetooth/bt_addr";
 
-
 static const char* WIRELESS_UNIX_SOCKET_DIR = "/data/misc/wireless/socket_daemon";
 static const char* WIRELESS_POWER_SET_PATH = "/sys/devices/platform/sd8x-rfkill/pwr_ctrl";
 
@@ -139,17 +136,41 @@ static const char DRIVER_PROP_NAME[]    = "wlan.driver.status";
 
 static const char* RFKILL_SD8X_PATH = "/sys/class/rfkill/rfkill0/state";
 
-static const char* BT_DRIVER_DEV_NAME = "/dev/mbtchar0";
-static const char* FM_DRIVER_DEV_NAME = "/dev/mfmchar0";
+static const char* WIFI_DRIVER_IFAC_NAME = "/sys/class/net/wlan0";
+static const char* BT_DRIVER_DEV_NAME    = "/dev/mbtchar0";
+static const char* FM_DRIVER_DEV_NAME    = "/dev/mfmchar0";
+static const char* NFC_DRIVER_DEV_NAME   = "/dev/mnfcchar0";
+
+enum
+{
+    WIFI_DRIVER_IFAC_INDEX,
+    BT_DRIVER_DEV_INDEX,
+    FM_DRIVER_DEV_INDEX,
+    NFC_DRIVER_DEV_INDEX
+};
 
 static const char* MRVL_PROP_WL_RECOVERY = "persist.sys.mrvl_wl_recovery";
 
 static int flag_exit = 0;
 static int debug = 1;
 
-static const char* base_mac = "00:50:43:00:00:00";
-static char mac_addr[20];
-static int exit_main = 0;
+#define RANDOM(x) (rand()%x)
+#define MAC_ADDR_LENGTH 12
+#define VENDOR_PREFIX_LENGTH 6
+#define FMT_MAC_ADDR_LEN (MAC_ADDR_LENGTH+5)
+
+unsigned short right_masks[] = {0x100, 0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
+
+unsigned char hex_char[]={'0','1','2','3','4','5','6','7','8','9','A','B','C',
+'D','E','F'};
+//Marvell MAC prefix assigned by IEEE: 00:50:43
+const char *vendor_prefix = "00:50:43:00:00:00";
+const char* wifi_mac_path = "/NVM/wifi_addr";
+const char* bt_mac_path = "/NVM/bt_addr";
+char fmt_mac_addr[FMT_MAC_ADDR_LEN+1];
+char rights = "rwxrwxrwx";
+
+static int flag_exit = 0;
 
 void android_set_aid_and_cap()
 {
@@ -265,51 +286,95 @@ int read_region_alpha(const char* filepath, char *region)
     return 0;
 }
 
-void setup_random_mac_addr()
+void format_mac_addr(void)
 {
-    int i;
-    int res;
-    const char numalpha[] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
+    unsigned short r = 0;
+    unsigned short n = 0;
 
-    strncpy(mac_addr, base_mac, strlen(base_mac));
-    for( i = 9; i < 17; ++i )
+    strncpy(fmt_mac_addr, vendor_prefix, strlen(vendor_prefix));
+    for(n = VENDOR_PREFIX_LENGTH * 3 /2; n < FMT_MAC_ADDR_LEN; n++ )
     {
-        if( mac_addr[i] == ':' )
+        if( fmt_mac_addr[n] != ':' )
         {
-            ++i
+            r = RANDOM(16);
+            fmt_mac_addr[n] = hex_char[r];
         }
         else
         {
-            mac_addr[i] = numalpha[rand() % 16];
+            n++;
         }
     }
 }
 
-void setup_file_mac_addr(char *addr, const char *filepath)
+int read_mac_from_file(char* mac_addr, const char *file_path)
 {
-    FILE* file;
-    int read;
+    int ret = 0;
+    FILE* fp = NULL;
+    int sz;
+    int len = 17;
 
-    file = fopen(filepath, "r");
-    if( file )
+    fp = fopen(file_path, "r");
+    if (!fp)
     {
-        read = fread(addr, 1, 17, file);
-        addr[17] = 0;
-        if( read >= 0 )
-        {
-            if( read != 17 )
-                ALOGE("read(%s) unexpected MAC size %d", filepath, strerror(errno), errno);
-        }
-        else
-        {
-            ALOGE("read(%s) failed: %s (%d)", filepath, strerror(errno), errno);
-        }
-        fclose(file);
+        ALOGE("open(%s) failed: %s (%d)", file_path, strerror(errno), errno);
+        goto out;
     }
-    else
+
+    sz = fread(mac_addr, 1, len, fp);
+    mac_addr[len] = '\0';
+    if (sz < 0)
     {
-        ALOGE("open(%s) failed: %s (%d)", filepath, strerror(errno), errno);
+        ALOGE("read(%s) failed: %s (%d)", file_path, strerror(errno), errno);
+        goto out;
     }
+    else if (sz != len)
+    {
+        ALOGE("read(%s) unexpected MAC size %d", file_path, sz);
+        goto out;
+    }
+
+    ret = 1;
+
+    out:
+    if (fp != NULL)
+    {
+        fclose(fp);
+    }
+
+    return ret;
+}
+
+int read_mac_from_cfg(char* mac_addr, const char *cfg_path)
+{
+    FILE* fp = NULL;
+    char buf[1024];
+    char* pos = NULL;
+
+    fp = fopen(cfg_path, "r");
+    if (!fp)
+    {
+        ALOGE("open(%s) failed: %s (%d)", cfg_path, strerror(errno), errno);
+        goto out;
+    }
+
+    memset(buf, 0, 1024);
+    fgets(buf, 1024, fp);
+    pos = buf;
+    if (strncmp(pos, "mac_addr", 8) == 0)
+    {
+        pos = strchr(pos, ':');
+        if (pos != NULL)
+        {
+            strncpy(mac_addr, pos+2, FMT_MAC_ADDR_LEN);
+        }
+    }
+
+    out:
+    if (fp != NULL)
+    {
+        fclose(fp);
+    }
+    return 0;
 }
 
 int check_psm_info()
@@ -352,12 +417,12 @@ void wifi_module_setup()
 
         if( access(WIFI_DRIVER_MODULE_MAC_INFO, 0) )
         {
-            setup_random_mac_addr();
+            format_mac_addr();
             ALOGD("generate wifi mac address from random generator: %s\n", mac_addr);
         }
         else
         {
-            setup_file_mac_addr(mac_addr, WIFI_DRIVER_MODULE_MAC_INFO);
+            read_mac_from_file(mac_addr, WIFI_DRIVER_MODULE_MAC_INFO);
             ALOGD("read wifi mac address from file %s: %s\n", WIFI_DRIVER_MODULE_MAC_INFO, mac_addr);
         }
         write_param(WIFI_DRIVER_MODULE_8777_MAC_ADDR_PARAM, mac_addr);
@@ -389,12 +454,12 @@ void bluetooth_module_setup()
     {
         if( access(BT_DRIVER_MODULE_BT_ADDR, 0) )
         {
-            setup_random_mac_addr();
+            format_mac_addr();
             ALOGD("generate bt address from random generator: %s\n", mac_addr);
         }
         else
         {
-            setup_file_mac_addr(mac_addr, BT_DRIVER_MODULE_BT_ADDR);
+            read_mac_from_file(mac_addr, BT_DRIVER_MODULE_BT_ADDR);
             ALOGD("read bt address from file %s: %s\n", BT_DRIVER_MODULE_BT_ADDR, mac_addr);
         }
         write_param(BT_DRIVER_MODULE_8777_BT_MAC_PARAM, mac_addr);
@@ -415,6 +480,7 @@ int main(void)
     sa.sa_handler = kill_handler;
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT,  &sa, NULL);
+    sigaction(SIGCHLD, &sa, NULL);
     /* Sometimes, if client close the socket unexpectedly, */
     /* we may continue to write that socket, then a SIGPIPE */
     /* would be delivered, which would cause the process exit; */
@@ -433,7 +499,7 @@ int main(void)
         return -1;
     }
     ALOGI("succeed to create socket and listen.\n");
-    while (!exit_main)
+    while (!flag_exit)
     {
         clifd = serv_accept (listenfd);
         if (clifd < 0)
@@ -571,20 +637,98 @@ int cmd_handler(char* buffer, char* drive_card)
     }
 }
 
-void modem_disable()
+#define    STALE    30    /* client's name can't be older than this (sec) */
+
+/* returns new fd if all OK, < 0 on error */
+int serv_accept (int listenfd)
 {
-    if( wifi_get_fwstate() != 1 || mrvl_sd8xxx_force_poweroff() )
-        set_power(0);
+    int                clifd, len;
+    time_t             staletime;
+    struct sockaddr_un unix_addr;
+    struct stat        statbuf;
+    const char*        pid_str;
+
+    len = sizeof (unix_addr);
+    if ( (clifd = accept (listenfd, (struct sockaddr *) &unix_addr, &len)) < 0)
+    {
+        ALOGE("listenfd %d, accept error: %s", listenfd, strerror(errno));
+        return (-1);        /* often errno=EINTR, if signal caught */
+    }
+    return (clifd);
+}
+
+int serv_listen (const char* name)
+{
+    int fd,len;
+    struct sockaddr_un unix_addr;
+
+    /* Create a Unix domain stream socket */
+    if ( (fd = socket (AF_UNIX, SOCK_STREAM, 0)) < 0)
+        return (-1);
+    unlink (name);
+    /* Fill in socket address structure */
+    memset (&unix_addr, 0, sizeof (unix_addr));
+    unix_addr.sun_family = AF_UNIX;
+    strcpy (unix_addr.sun_path, name);
+    snprintf(unix_addr.sun_path, sizeof(unix_addr.sun_path), "%s", name);
+    len = sizeof (unix_addr.sun_family) + strlen (unix_addr.sun_path);
+
+    /* Bind the name to the descriptor */
+    if (bind (fd, (struct sockaddr*)&unix_addr, len) < 0)
+    {
+        ALOGE("bind fd:%d and address:%s error: %s", fd, unix_addr.sun_path, strerror(errno));
+        close (fd);
+        return (-1);
+    }
+    if (chmod (name, 0666) < 0)
+    {
+        ALOGE("change %s mode error: %s", name, strerror(errno));
+        close (fd);
+        return (-1);
+    }
+    if (listen (fd, 5) < 0)
+    {
+        ALOGE("listen fd %d error: %s", fd, strerror(errno));
+        close (fd);
+        return (-1);
+    }
+    return (fd);
+}
+
+static void kill_handler(int sig)
+{
+    int result;
+    int status;
+
+    ALOGI("Received signal %d.", sig);
+
+    if( sig == SIGCHLD )
+    {
+        while( 1 )
+        {
+            result = waitpid(-1, &status, WNOHANG);
+            if( result <= 0 )
+                break;
+            ALOGI("child %d termination\n", 0);
+        }
+    }
+    else
+    {
+        power_sd8xxx.on = FALSE;
+        if( set_power(0) < 0 )
+            ALOGE("set_power failed.");
+        flag_exit = 1;
+    }
 }
 
 int copy_wifi_bt_cfg(const char* filepath)
 {
-    if( !access(filepath, 0) )
+    if( !access(filepath, F_OK) )
         return 1;
 
     // Looks like Marvell forgot to install this script
     system("tcmd-subcase.sh copy-wifi-bt-cfg");
-    return (access(filepath, 0) == 0);
+    return (access(filepath, F_OK) == 0);
 
 }
 
@@ -600,62 +744,198 @@ void block_sigchld(int how)
     }
 }
 
-int wifi_uap_enable()
+void check_wifi_bt_mac_addr()
 {
+    FILE *fp_bt = NULL;
+    FILE *fp_wifi = NULL;
+    char cfg_mac_addr[FMT_MAC_ADDR_LEN+1];
+    char file_mac_addr[FMT_MAC_ADDR_LEN+1];
 
-    ALOGD("wifi_uap_enable_builtin");
-    if( copy_wifi_bt_cfg(WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH) )
+    if (access(wifi_mac_path, F_OK) == 0)
+    {
+        memset(cfg_mac_addr, 0, FMT_MAC_ADDR_LEN+1);
+        memset(file_mac_addr, 0, FMT_MAC_ADDR_LEN+1);
+        read_mac_from_file(file_mac_addr, wifi_mac_path);
+        ALOGD("file wifi mac address: %s\n", file_mac_addr);
+        read_mac_from_cfg(cfg_mac_addr, WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH);
+        ALOGD("cfg wifi mac address: %s\n", cfg_mac_addr);
+        if (memcmp(file_mac_addr, cfg_mac_addr, FMT_MAC_ADDR_LEN) != 0)
+        {
+            ALOGD("wifi mac address not consistent, update the wifi cfg file");
+            fp_wifi = fopen(WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH, "w");
+            if (fp_wifi)
+            {
+                fprintf(fp_wifi, "mac_addr = wlan0: %s\n", file_mac_addr);
+                if(debug) ALOGD("update wifi mac_addr: %s\n", file_mac_addr);
+                file_mac_addr[1] = '2';
+                fprintf(fp_wifi, "mac_addr = p2p0: %s\n", file_mac_addr);
+            }
+            fclose(fp_wifi);
+        }
+    }
+
+    if (access(bt_mac_path, F_OK) == 0)
+    {
+        memset(cfg_mac_addr, 0, FMT_MAC_ADDR_LEN+1);
+        memset(file_mac_addr, 0, FMT_MAC_ADDR_LEN+1);
+        read_mac_from_file(file_mac_addr, bt_mac_path);
+        ALOGD("file bt mac address: %s\n", file_mac_addr);
+        read_mac_from_cfg(cfg_mac_addr, BT_DRIVER_MODULE_INIT_CFG_STORE_PATH);
+        ALOGD("cfg bt mac address: %s\n", cfg_mac_addr);
+        if (memcmp(file_mac_addr, cfg_mac_addr, FMT_MAC_ADDR_LEN) != 0)
+        {
+            ALOGD("bt mac address not consistent, update the bt cfg file");
+            fp_bt = fopen(BT_DRIVER_MODULE_INIT_CFG_STORE_PATH, "w");
+            if (fp_bt)
+            {
+                fprintf(fp_bt, "mac_addr = mbtchar0: %s\n", file_mac_addr);
+                if(debug) ALOGD("update bt mac_addr: %s\n", file_mac_addr);
+            }
+            fclose(fp_bt);
+        }
+    }
 }
 
-int wifi_enable(void)
+void MSRAND(void)
 {
-    int ret = 0;
+	struct timeval tv;
+	unsigned int seed;
+	gettimeofday(&tv, NULL);
+	seed = tv.tv_sec * 1000000 + tv.tv_usec;
+	srand(seed);
+}
 
-    power_sd8xxx.type.wifi_on = TRUE;
-    block_sigchld(SIG_BLOCK);
-    ret = wifi_uap_enable();
+int create_wifi_bt_init_cfg()
+{
+    unsigned short i = 0;
+    FILE *fp_bt = NULL;
+    FILE *fp_wifi = NULL;
+    int ret = -1;
+    int size = 0;
 
-    if(ret < 0)goto out;
-    ret = wait_interface_ready(WIFI_DRIVER_IFAC_NAME, 1000, 2000);
-    if(ret < 0)
+    fp_bt = fopen(BT_DRIVER_MODULE_INIT_CFG_STORE_PATH, "w" );
+    if( !fp_bt )
     {
-        property_set(DRIVER_PROP_NAME, "timeout");
-        goto out;
+        ALOGE("create the file %s failed, error:%s\n", BT_DRIVER_MODULE_INIT_CFG_STORE_PATH, strerror(errno));
+        goto err;
     }
-#ifdef SD8887_NEED_CALIBRATE
-    ret = wifi_calibrate();
-#endif
-out:
-    if(ret == 0)
+    fp_wifi = fopen(WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH, "w" );
+
+    if( !fp_wifi )
     {
-        property_set(DRIVER_PROP_NAME, "ok");
+        ALOGE("create the file %s failed, error:%s\n", WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH, strerror(errno));
+        goto err;
+    }
+
+    MSRAND();
+
+    if (access(bt_mac_path, F_OK) == 0)
+    {
+        read_mac_from_file(fmt_mac_addr, bt_mac_path);
+        ALOGD("read bt mac address from file %s: %s\n", bt_mac_path, fmt_mac_addr);
     }
     else
     {
-        property_set(DRIVER_PROP_NAME, "failed");
+        format_mac_addr();
+        ALOGD("generate bt mac address from random generator: %s\n", fmt_mac_addr);
+    }
+    size = fprintf( fp_bt, "mac_addr = mbtchar0: %s\n",fmt_mac_addr);
+    if(debug) ALOGD("mac_addr = mbtchar0: %s\n",fmt_mac_addr);
+    if(size <= 0)
+    {
+        ALOGE("write the file %s failed, error:%s\n", BT_DRIVER_MODULE_INIT_CFG_STORE_PATH, strerror(errno));
+        goto err;
+    }
+
+    if (access(wifi_mac_path, F_OK) == 0)
+    {
+        read_mac_from_file(fmt_mac_addr, wifi_mac_path);
+        ALOGD("read wifi mac address from file %s: %s\n", wifi_mac_path, fmt_mac_addr);
+    }
+    else
+    {
+        format_mac_addr();
+        ALOGD("generate wifi mac address from random generator: %s\n", fmt_mac_addr);
+    }
+    size = fprintf( fp_wifi, "mac_addr = wlan0: %s\n",fmt_mac_addr);
+    if(debug) ALOGD("mac_addr = wlan0: %s\n",fmt_mac_addr);
+    if(size <= 0)
+    {
+        ALOGE("write the file %s failed, error:%s\n", WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH, strerror(errno));
+        goto err;
+    }
+
+    fmt_mac_addr[1] = '2';
+    size  = fprintf( fp_wifi, "mac_addr = p2p0: %s\n",fmt_mac_addr);
+    if(debug) ALOGD("mac_addr = p2p0: %s\n",fmt_mac_addr);
+    if(size <= 0)
+    {
+        ALOGE("write the file %s failed, error:%s\n", WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH, strerror(errno));
+        goto err;
+    }
+
+    ret = 0;
+err:
+    if(fp_bt != NULL)fclose(fp_bt);
+    if(fp_wifi != NULL)fclose(fp_wifi);
+    if(ret != 0)
+    {
+        unlink(BT_DRIVER_MODULE_INIT_CFG_STORE_PATH);
+        unlink(WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH);
     }
     return ret;
 }
 
-int wifi_disable(void)
+//to do: don’t use polling mode, use uevent, listen interface added uevent from driver
+int wait_interface_ready (int interface, int us_interval, int retry)
 {
-    int ret = 0;
+    const char* interface_path;
+    int fd;
+    int count = retry;
+    struct stat fstat;
+    int i;
+    char permissions[10];
 
-    power_sd8xxx.type.wifi_on = FALSE;
-
-    block_sigchld(SIG_BLOCK);
-    ret = modem_disable();
-    block_sigchld(SIG_UNBLOCK);
-
-    if(ret == 0)
+    switch( interface )
     {
-        property_set(DRIVER_PROP_NAME, "unloaded");
+        case WIFI_DRIVER_IFAC_INDEX: interface_path = WIFI_DRIVER_IFAC_NAME; break;
+        case BT_DRIVER_DEV_INDEX   : interface_path = BT_DRIVER_DEV_NAME; break;
+        case FM_DRIVER_DEV_INDEX   : interface_path = FM_DRIVER_DEV_NAME; break;
+        case NFC_DRIVER_DEV_INDEX  : interface_path = NFC_DRIVER_DEV_NAME; break;
+        default:
+            ALOGE("Unknown module!");
+            return -1;
     }
-    else
+    while( count-- )
     {
-        property_set(DRIVER_PROP_NAME, "failed");
+        fd = open(interface_path, O_RDONLY);
+        if( fd >= 0 )
+        {
+            close(fd);
+            if( stat(interface_path, &fstat) == 0 )
+            {
+                for( i = 0; i < 9; ++i )
+                {
+                    if( right_masks[i] & fstat.st_mode )
+                        permissions[i] = rights[i];
+                    else
+                        permissions[i] = '-';
+                }
+                permissions[9] = 0;
+                ALOGE("File name: %s", interface_path);
+                ALOGE("Permissions: %s", permissions);
+                ALOGE("User-id: %ld,Group-id: %ld", fstat.st_uid, fstat.st_gid);
+                //                                                                                                                       net_bt_stack
+                if( interface != BT_DRIVER_DEV_INDEX || fstat.st_uid == AID_BLUETOOTH || fstat.st_gid == AID_BLUETOOTH || fstat.st_gid == 3008 )
+                    return 0;
+            }
+
+        }
+        usleep(us_interval);
     }
-    return ret;
+
+    ALOGE("timeout(%dms) to wait %s", us_interval * retry / 1000, interface_path);
+    return -1;
 }
 
 int set_power(int on)
@@ -682,3 +962,236 @@ int set_power(int on)
 
     return res;
 }
+
+int bt_fm_nfc_disable(void)
+{
+    int res = 0;
+    /* To speed up the recovery, detect the FW status here */
+    if (wifi_get_fwstate() == FW_STATE_HUNG || (res = mrvl_sd8xxx_force_poweroff()) != 0 )
+    {
+        res = set_power(0);
+    }
+    return res;
+}
+
+int bt_fm_nfc_enable(void)
+{
+    int ret = 0;
+    char arg_buf[MAX_BUFFER_SIZE];
+
+    ALOGD("%s(L%d): " __func__, 1002);
+    ALOGD(__func__);
+
+    memset(arg_buf, 0, MAX_BUFFER_SIZE);
+
+    if( copy_wifi_bt_cfg(BT_DRIVER_MODULE_INIT_CFG_STORE_PATH) )
+    {
+        ALOGD("The bluetooth config file exists");
+        check_wifi_bt_mac_addr();
+    }
+    else
+    {
+        ALOGD("The bluetooth config file doesn't exist");
+        if( create_wifi_bt_init_cfg() )
+            ALOGD("create wifi bt init cfg file failed");
+    }
+    if( access(BT_DRIVER_MODULE_INIT_CFG_STORE_PATH, F_OK) )
+        ALOGD("Couldn't access %s!", BT_DRIVER_MODULE_INIT_CFG_STORE_PATH);
+
+    bluetooth_module_setup();
+    ret = set_power(1);
+    if( ret < 0 )
+    {
+        ALOGD(__func__ ", set_power fail: errno: %d, %s", errno, strerror(errno));
+    }
+    return ret;
+}
+
+int wifi_uap_enable()
+{
+    int res;
+
+    ALOGD("wifi_uap_enable_builtin");
+    if( copy_wifi_bt_cfg(WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH) )
+    {
+        ALOGD("The wifi config file exists");
+        check_wifi_bt_mac_addr();
+    }
+    else
+    {
+        ALOGD("The wifi config file doesn't exist");
+        if( create_wifi_bt_init_cfg() )
+            ALOGD("create wifi bt init cfg file failed");
+    }
+
+    if( access(WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH, F_OK) )
+        ALOGD("Couldn't access %s!", WIFI_DRIVER_MODULE_INIT_CFG_STORE_PATH);
+    // Marvell is wrong here ? They put /system/etc/firmware/mrvl/mrvl/wifi_cal_data.conf
+    // But this file exists in /system/etc/firmware/mrvl/wifi_cal_data.conf
+    if( !copy_wifi_bt_cfg(WIFI_DRIVER_MODULE_CAL_DATA_CFG_STORE_PATH) )
+        ALOGD("The wifi calibrate file does not exist");
+
+    wifi_module_setup();
+    res = set_power(1);
+    if( res < 0)
+        ALOGD(__func__ ", set_power fail");
+
+    return res;
+}
+
+int wifi_enable(void)
+{
+    int ret = 0;
+
+    power_sd8xxx.type.wifi_on = TRUE;
+    block_sigchld(SIG_BLOCK);
+    ret = wifi_uap_enable();
+
+    if( ret < 0 )
+    {
+        power_sd8xxx.type.wifi_on = FALSE;
+        property_set(DRIVER_PROP_NAME, "failed");
+    }
+    else
+    {
+        ret = wait_interface_ready(0, 1000, 8000);
+        if(ret < 0)
+        {
+            power_sd8xxx.type.wifi_on = FALSE;
+            property_set(DRIVER_PROP_NAME, "timeout");
+        }
+        else
+        {
+            property_set(DRIVER_PROP_NAME, "ok");
+        }
+    }
+    block_sigchld(SIG_UNBLOCK);
+
+    return ret;
+}
+
+int wifi_disable(void)
+{
+    int ret = 0;
+
+    power_sd8xxx.type.wifi_on = FALSE;
+
+    block_sigchld(SIG_BLOCK);
+    ret = modem_disable();
+    block_sigchld(SIG_UNBLOCK);
+
+    if(ret == 0)
+    {
+        property_set(DRIVER_PROP_NAME, "unloaded");
+    }
+    else
+    {
+        property_set(DRIVER_PROP_NAME, "failed");
+    }
+    return ret;
+}
+
+int bt_enable(void)
+{
+    int ret = 0;
+
+    power_sd8xxx.type.bt_on = TRUE;
+    block_sigchld(SIG_BLOCK);
+
+    ret = bt_fm_nfc_enable();
+
+    if (ret < 0) {
+        ALOGE("Fail to enable bt!");
+        goto out;
+    }
+    ret = wait_interface_ready(BT_DRIVER_DEV_INDEX, 200000, 40);
+    if(ret < 0)
+    {
+        ALOGE("Timeout to wait /dev/mbtchar0!");
+        goto out;
+    }
+    get_driver_version(1);
+out:
+    block_sigchld(SIG_UNBLOCK);
+    if( ret < 0 )
+        power_sd8xxx.type.bt_on = FALSE;
+
+    return ret;
+}
+
+
+int bt_disable()
+{
+    int ret;
+
+    power_sd8xxx.type.bt_on = FALSE;
+    block_sigchld(SIG_BLOCK);
+    ret = modem_disable();
+    block_sigchld(SIG_UNBLOCK);
+
+    return ret;
+}
+
+int fm_enable(void)
+{
+    int ret = 0;
+    power_sd8xxx.type.fm_on = TRUE;
+
+    ret = bt_fm_enable();
+    if(ret < 0) {
+        ALOGE("Fail to enable bt_fm!");
+        goto out;
+    }
+    ret = wait_interface_ready(FM_DRIVER_DEV_NAME, 200000, 10);
+    if(ret < 0)
+    {
+        ALOGE("Timeout to wait /dev/mfmchar0!");
+        goto out;
+    }
+out:
+    return ret;
+}
+
+int fm_disable()
+{
+    int ret = 0;
+    power_sd8xxx.type.fm_on = FALSE;
+    if(power_sd8xxx.type.bt_on == FALSE)
+    {
+        ret = bt_fm_disable();
+    }
+    return ret;
+}
+
+int check_cfg_file(const char* cfg_path)
+{
+    int ret = 0;
+
+    if (access(cfg_path, F_OK) == 0)
+    {
+        ret = 1;
+    }
+    else
+    {
+        system("tcmd-subcase.sh copy-wifi-bt-cfg");
+        if (access(cfg_path, F_OK) == 0)
+        {
+            ret = 1;
+        }
+    }
+
+    return ret;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
