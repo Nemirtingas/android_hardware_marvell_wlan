@@ -25,55 +25,64 @@
 #define _MARVELL_WIRELESS_DAEMON
 
 void handle_thread(int clifd);
-int cmd_handler(char* buffer);
+int cmd_handler(char* buffer, char *drive_card);
 int wifi_enable(void);
-int uap_enable(void);
+//int uap_enable(void);
 int bt_enable(void);
 int fm_enable(void);
-int wifi_uap_enable(const char* driver_module_arg);
+//int wifi_uap_enable(const char* driver_module_arg);
 int bt_fm_enable(void);
+int nfc_enable(void);
+
 
 int wifi_disable(void);
-int uap_disable(void);
+//int uap_disable(void);
 int bt_disable(void);
 int fm_disable(void);
-int wifi_uap_disable(void);
+//int wifi_uap_disable(void);
 int bt_fm_disable(void);
-int wifi_set_drv_arg(char * wifi_drv_arg);
-int bt_set_drv_arg(char * bt_drv_arg);
-int wifi_set_drvdbg_arg(char * wifi_dbg_arg);
-int bt_set_drvdbg_arg(char * bt_dbg_arg);
+int nfc_disable(void);
+
+int set_drv_arg(void);
+int mrvl_sd8xxx_force_poweroff(void);
+int get_card_type(char*);
+
+//int wifi_set_drv_arg(char * wifi_drv_arg);
+//int bt_set_drv_arg(char * bt_drv_arg);
+//int wifi_set_drvdbg_arg(char * wifi_dbg_arg);
+//int bt_set_drvdbg_arg(char * bt_dbg_arg);
 
 int set_power(int on);
-int get_power(void);
+//int get_power(void);
 
-int insmod(const char *filename, const char *args);
-int rmmod(const char *modname);
-int check_driver_loaded(const char *modname);
+//int insmod(const char *filename, const char *args);
+//int rmmod(const char *modname);
+//int check_driver_loaded(const char *modname);
 
-int enable_bt_8887();
-int hci_is_up();
-int up_hci_device();
-int down_hci_device();
-int down_all_hci_devices(void);
-int create_hci_sock();
-int wait_interface_ready (const char* interface_path, int us_interval, int retry);
+//int enable_bt_8887();
+//int hci_is_up();
+//int up_hci_device();
+//int down_hci_device();
+//int down_all_hci_devices(void);
+//int create_hci_sock();
+int wait_interface_ready (int interface_path, int us_interval, int retry);
 static void kill_handler(int sig);
-int bt_calibrate(void);
-int wifi_calibrate(void);
+//int bt_calibrate(void);
+//int wifi_calibrate(void);
+void get_driver_version(int);
 
-int init_module (void *, unsigned long, const char *);
-int delete_module (const char*, unsigned int);
-void* load_file(const char* filename, unsigned* size);
+//int init_module (void *, unsigned long, const char *);
+//int delete_module (const char*, unsigned int);
+//void* load_file(const char* filename, unsigned* size);
 
 int serv_listen (const char* name);
 int serv_accept (int listenfd);
 
-int create_wifi_bt_init_cfg();
-void check_wifi_bt_mac_addr();
+//int create_wifi_bt_init_cfg();
+//void check_wifi_bt_mac_addr();
 
-int wifi_uap_force_poweroff();
-int bt_fm_force_poweroff();
+//int wifi_uap_force_poweroff();
+//int bt_fm_force_poweroff();
 int kill_process_by_name(const char* ProcName);
 int wifi_get_fwstate();
 

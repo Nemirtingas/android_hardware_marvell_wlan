@@ -42,6 +42,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/stat.h>
 #include <cutils/properties.h>
 
@@ -130,7 +131,6 @@ static const char* BT_DRIVER_MODULE_INIT_CFG_STORE_PATH = "/data/misc/wireless/b
 static const char* BT_DRIVER_MODULE_BT_ADDR = "/efs/bluetooth/bt_addr";
 
 static const char* WIRELESS_UNIX_SOCKET_DIR = "/data/misc/wireless/socket_daemon";
-static const char* WIRELESS_POWER_SET_PATH = "/sys/devices/platform/sd8x-rfkill/pwr_ctrl";
 
 static const char DRIVER_PROP_NAME[]    = "wlan.driver.status";
 
@@ -141,7 +141,9 @@ static const char* BT_DRIVER_DEV_NAME    = "/dev/mbtchar0";
 static const char* FM_DRIVER_DEV_NAME    = "/dev/mfmchar0";
 static const char* NFC_DRIVER_DEV_NAME   = "/dev/mnfcchar0";
 
-#define SDIO_DEVICE_PATH = "/sys/bus/sdio/devices/mmc2:0001:1/device";
+#define WIRELESS_POWER_SET_PATH "/sys/devices/platform/sd8x-rfkill/pwr_ctrl"
+#define SDIO_DEVICE_PATH        "/sys/bus/sdio/devices/mmc2:0001:1/device"
+#define MRVL_PROP_WL_RECOVERY   "persist.sys.mrvl_wl_recovery"
 
 enum
 {
@@ -194,14 +196,13 @@ struct driver_debug_t
 	{3, "/proc/mbt/mnfcchar0/status", "/proc/mbt/mnfcchar0/config"},
 };
 
-static const *char android_persist_prop[] = {
+static const char *android_persist_prop[] = {
 	"persist.sys.wifi.driver.version",
 	"persist.sys.bt.driver.version",
 	"persist.sys.fm.driver.version",
 	"persist.sys.nfc.driver.version",
 };
 
-static const char* MRVL_PROP_WL_RECOVERY = "persist.sys.mrvl_wl_recovery";
 
 static int flag_exit = 0;
 static int debug = 1;
@@ -219,9 +220,7 @@ const char *vendor_prefix = "00:50:43:00:00:00";
 const char* wifi_mac_path = "/NVM/wifi_addr";
 const char* bt_mac_path = "/NVM/bt_addr";
 char fmt_mac_addr[FMT_MAC_ADDR_LEN+1];
-char rights = "rwxrwxrwx";
-
-static int flag_exit = 0;
+const char *rights = "rwxrwxrwx";
 
 void android_set_aid_and_cap()
 {
@@ -296,7 +295,7 @@ int write_param(const char* filepath, const char* param)
         close(fd);
         if( sent != len )
         {
-            ALOGE("Failed to write param: %s (%s) %d", param, strerro(errno), errno);
+            ALOGE("Failed to write param: %s (%s) %d", param, strerror(errno), errno);
             return -1;
         }
     }
@@ -309,7 +308,7 @@ int read_region_alpha(const char* filepath, char *region)
     int len;
     int res = 0;
 
-    file = fopen(filepath);
+    file = fopen(filepath, "r");
     if( file )
     {
         len = fread(region, 1, 2, file);
@@ -408,7 +407,7 @@ int read_mac_from_cfg(char* mac_addr, const char *cfg_path)
     }
 	else
 	{
-		memset(buf, 0, 1024);
+		memset(buf, 0, sizeof(buf));
 		fgets(buf, 1024, fp);
 		pos = buf;
 		if (strncmp(pos, "mac_addr", 8) == 0)
@@ -444,7 +443,7 @@ int check_psm_info()
         else
         {
             res = 1;
-            ALOGE("Read %s, Fail, %s", WIFI_DRIVER_MODULE_PSM_INFO);
+            ALOGE("Read %s, Fail, %s", WIFI_DRIVER_MODULE_PSM_INFO, strerror(errno));
         }
     }
     else
@@ -469,14 +468,14 @@ void wifi_module_setup()
         if( access(WIFI_DRIVER_MODULE_MAC_INFO, 0) )
         {
             format_mac_addr();
-            ALOGD("generate wifi mac address from random generator: %s\n", mac_addr);
+            ALOGD("generate wifi mac address from random generator: %s\n", fmt_mac_addr);
         }
         else
         {
-            read_mac_from_file(mac_addr, WIFI_DRIVER_MODULE_MAC_INFO);
-            ALOGD("read wifi mac address from file %s: %s\n", WIFI_DRIVER_MODULE_MAC_INFO, mac_addr);
+            read_mac_from_file(fmt_mac_addr, WIFI_DRIVER_MODULE_MAC_INFO);
+            ALOGD("read wifi mac address from file %s: %s\n", WIFI_DRIVER_MODULE_MAC_INFO, fmt_mac_addr);
         }
-        write_param(WIFI_DRIVER_MODULE_8777_MAC_ADDR_PARAM, mac_addr);
+        write_param(WIFI_DRIVER_MODULE_8777_MAC_ADDR_PARAM, fmt_mac_addr);
         need_wifi_mac_setup = 0;
     }
     write_param(WIFI_DRIVER_MODULE_8777_MFG_MODE_PARAM, "0");
@@ -506,14 +505,14 @@ void bluetooth_module_setup()
         if( access(BT_DRIVER_MODULE_BT_ADDR, 0) )
         {
             format_mac_addr();
-            ALOGD("generate bt address from random generator: %s\n", mac_addr);
+            ALOGD("generate bt address from random generator: %s\n", fmt_mac_addr);
         }
         else
         {
-            read_mac_from_file(mac_addr, BT_DRIVER_MODULE_BT_ADDR);
-            ALOGD("read bt address from file %s: %s\n", BT_DRIVER_MODULE_BT_ADDR, mac_addr);
+            read_mac_from_file(fmt_mac_addr, BT_DRIVER_MODULE_BT_ADDR);
+            ALOGD("read bt address from file %s: %s\n", BT_DRIVER_MODULE_BT_ADDR, fmt_mac_addr);
         }
-        write_param(BT_DRIVER_MODULE_8777_BT_MAC_PARAM, mac_addr);
+        write_param(BT_DRIVER_MODULE_8777_BT_MAC_PARAM, fmt_mac_addr);
         need_bluetooth_mac_setup = 0;
     }
 }
@@ -597,7 +596,7 @@ void handle_thread(int clifd)
         strncpy(buffer, "0,OK ", sizeof(buffer));
         if( strnlen(drive_card, MAX_BUFFER_SIZE) <= 250 )
         {
-            strncat(buffer, drive_card, MAX_BUFFER_SIZE);
+            strncat(buffer, drive_card, MAX_BUFFER_SIZE-1);
         }
     }
     else
@@ -660,32 +659,24 @@ int cmd_handler(char* buffer, char* drive_card)
         return set_power(1);
     }
 
+    /* Note: The ' ' before the arg is needed */
     if (!strncmp(buffer, "WIFI_DRV_ARG ", strlen("WIFI_DRV_ARG ")))
-    {
-        /* Note: The ' ' before the arg is needed */
         return set_drv_arg();
-    }
 
+    /* Note: The ' ' before the arg is needed */
     if (!strncmp(buffer, "BT_DRV_ARG ", strlen("BT_DRV_ARG ")))
-    {
-        /* Note: The ' ' before the arg is needed */
         return set_drv_arg();
-	}
 
 	if (!strncmp(buffer, "MRVL_SD8XXX_FORCE_POWER_OFF", strlen("MRVL_SD8XXX_FORCE_POWER_OFF")))
-	{
         return mrvl_sd8xxx_force_poweroff();
-    }
 
     if (!strncmp(buffer, "WIFI_GET_FWSTATE", strlen("WIFI_GET_FWSTATE")))
-    {
         return wifi_get_fwstate();
-    }
 
     if (!strncmp(buffer, "GET_CARD_TYPE", strlen("GET_CARD_TYPE")))
-	{
         return get_card_type(drive_card);
-    }
+
+    return 0;
 }
 
 #define    STALE    30    /* client's name can't be older than this (sec) */
@@ -1018,7 +1009,7 @@ int wait_interface_ready (int interface, int us_interval, int retry)
                 permissions[9] = 0;
                 ALOGE("File name: %s", interface_path);
                 ALOGE("Permissions: %s", permissions);
-                ALOGE("User-id: %ld,Group-id: %ld", fstat.st_uid, fstat.st_gid);
+                ALOGE("User-id: %ld,Group-id: %ld", (long int)fstat.st_uid, (long int)fstat.st_gid);
                 //                                                                                                                       net_bt_stack
                 if( interface != BT_DRIVER_DEV_INDEX || fstat.st_uid == AID_BLUETOOTH || fstat.st_gid == AID_BLUETOOTH || fstat.st_gid == 3008 )
                     return 0;
@@ -1071,7 +1062,7 @@ int mrvl_sd8xxx_force_poweroff()
 	char *v4; // r0
 	char buffer[92]; // [sp+8h] [bp-78h]
 
-	memset(buffer, 0, 92u);
+	memset(buffer, 0, sizeof(buffer));
 	property_get("persist.sys.mrvl_wl_recovery", buffer, "1");
 	if ( atoi(buffer) )
 	{
@@ -1124,7 +1115,7 @@ int bt_fm_enable(void)
     int ret = 0;
     char arg_buf[MAX_BUFFER_SIZE];
 
-    ALOGD("%s(L%d): " __func__, 1002);
+    ALOGD("%s(L%d): ", __func__, 1002);
     ALOGD(__func__);
 
     memset(arg_buf, 0, MAX_BUFFER_SIZE);
@@ -1147,7 +1138,7 @@ int bt_fm_enable(void)
     ret = set_power(1);
     if( ret < 0 )
     {
-        ALOGD(__func__ ", set_power fail: errno: %d, %s", errno, strerror(errno));
+        ALOGD("%s, set_power fail: errno: %d, %s", __func__, errno, strerror(errno));
     }
     return ret;
 }
@@ -1179,7 +1170,7 @@ int wifi_uap_enable()
     wifi_module_setup();
     res = set_power(1);
     if( res < 0)
-        ALOGD(__func__ ", set_power fail");
+        ALOGD("%s, set_power fail", __func__);
 
     return res;
 }
@@ -1222,7 +1213,7 @@ int wifi_disable(void)
     power_sd8xxx.type.wifi_on = FALSE;
 
     block_sigchld(SIG_BLOCK);
-    ret = modem_disable();
+    ret = bt_fm_disable();
     block_sigchld(SIG_UNBLOCK);
 
     if(ret == 0)
@@ -1305,13 +1296,12 @@ int fm_enable(void)
 int fm_disable()
 {
     power_sd8xxx.type.fm_on = FALSE;
-    return bt_fm_disable;
+    return bt_fm_disable();
 }
 
 int nfc_enable()
 {
 	int ret;
-	const char *v1; // r2
 
 	power_sd8xxx.type.nfc_on = TRUE;
 
@@ -1426,7 +1416,7 @@ const char* read_driver_info(FILE *file, char *buffer, int type, int is_status_f
 
 void get_driver_version(int type)
 {
-	driver_debug_t *driver_debug_paths;
+	struct driver_debug_t *driver_debug_paths;
 	const char* driver_info_line;
 	char cmd[256];
 	char info[256];
@@ -1439,30 +1429,30 @@ void get_driver_version(int type)
 	memset(buffer, 0, sizeof(buffer));
 	if( type < TYPE_SD8xxx )
 	{
-		driver_debug_paths = drivers_debug[type];
+		driver_debug_paths = &drivers_debug[type];
 		if( strlen(driver_debug_paths->status) < 252 && strlen(driver_debug_paths->config) < 252 )
 		{
 			// Prepare to read status file
-			strncat(cmd, "cat ", 256);
-			strncat(cmd, driver_debug_paths->status, 256);
+			strncat(cmd, "cat ", 255);
+			strncat(cmd, driver_debug_paths->status, 255);
 			file = popen(cmd, "r");
 			if( file )
 			{
 				driver_info_line = read_driver_info(file, buffer, type, 0);
-				strncat(info, driver_info_line, 256);
+				strncat(info, driver_info_line, 255);
 				fclose(file);
 				property_set(android_persist_prop[type], info);
 				
 				// Prepare to read config file
-				memset(buffer, 0, buffer);
+				memset(buffer, 0, sizeof(buffer));
 				memset(cmd, 0, sizeof(cmd));
-				strncat(cmd, "cat ", 256);
-				strncat(cmd, driver_debug_paths->config, 256);
+				strncat(cmd, "cat ", 255);
+				strncat(cmd, driver_debug_paths->config, 255);
 				file = popen(cmd, "r");
 				if( file )
 				{
 					driver_info_line = read_driver_info(file, buffer, type, 1);
-					strncat(info, driver_info_line, 256);
+					strncat(info, driver_info_line, 255);
 					fclose(file);
 				}
 				else
@@ -1539,7 +1529,7 @@ int get_sdio_card_type(int x)
 	if( x == 1 )
 		return TYPE_SD8xxx;
 	
-	memset(buffer, 0, 1024);
+	memset(buffer, 0, sizeof(buffer));
 	file = popen("cat " SDIO_DEVICE_PATH, "r");
 	if( !file )
 	{
@@ -1558,7 +1548,7 @@ int get_sdio_card_type(int x)
 		sdio_card_id = atoi(buffer);
 	
 	fclose(file);
-	ALOGI("sdio card id %lx", sdio_card_id);
+	ALOGI("sdio card id %lx", (long unsigned int)sdio_card_id);
 	
 	switch( sdio_card_id )
 	{
@@ -1581,9 +1571,9 @@ int get_card_type(char *card_type)
 	type = get_sdio_card_type(0);
 	if( type >= TYPE_SD8xxx )
 	{
-		ALOGE("Unknown card type: %lu", type);
+		ALOGE("Unknown card type: %lu", (long unsigned int)type);
 		return -1;
 	}
-	sprintf(card_type, "%lu %s", type, sdio_types[type].name);
+	sprintf(card_type, "%lu %s", (long unsigned int)type, sdio_types[type].name);
 	return 0;
 }

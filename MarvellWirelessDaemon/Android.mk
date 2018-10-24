@@ -17,8 +17,8 @@ LOCAL_SRC_FILES := \
 LOCAL_SHARED_LIBRARIES := \
     libc\
     libcutils \
-    libutils \
-    libnetutils
+    libutils
+#    libnetutils
 #    libbluetooth
 
 LOCAL_MODULE:=MarvellWirelessDaemon

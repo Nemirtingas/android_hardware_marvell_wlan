@@ -17,7 +17,7 @@
 LOCAL_PATH := $(call my-dir)
 
 ifeq ($(TARGET_BOARD_PLATFORM), mrvl)
-ifeq ($(TARGET_SOC), pxa1908)
+ifeq ($(TARGET_BOARD_SOC), pxa1908)
 
 pxa_dirs := \
 	MarvellWirelessDaemon
