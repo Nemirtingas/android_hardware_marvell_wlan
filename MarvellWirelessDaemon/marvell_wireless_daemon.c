@@ -141,8 +141,6 @@ static const char* BT_DRIVER_DEV_NAME    = "/dev/mbtchar0";
 static const char* FM_DRIVER_DEV_NAME    = "/dev/mfmchar0";
 static const char* NFC_DRIVER_DEV_NAME   = "/dev/mnfcchar0";
 
-struct 
-
 #define SDIO_DEVICE_PATH = "/sys/bus/sdio/devices/mmc2:0001:1/device";
 
 enum
