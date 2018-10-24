@@ -17,23 +17,12 @@
 LOCAL_PATH := $(call my-dir)
 
 ifeq ($(TARGET_BOARD_PLATFORM), mrvl)
-ifeq ($(TARGET_SOC), pxa1088)
+ifeq ($(TARGET_SOC), pxa1908)
 
-pxa1088_dirs := \
-	MarvellWirelessDaemon \
-	gpu-engine \
-	graphics \
-	hwcomposer \
-	hwcomposerGC \
-	ipplib \
-	libMarvellWireless \
-	libstagefrighthw \
-	marvell-gralloc \
-	phycontmem-lib \
-	sd8787 \
-	vmeta-lib
+pxa_dirs := \
+	MarvellWirelessDaemon
 
-include $(call all-named-subdir-makefiles,$(pxa1088_dirs))
+include $(call all-named-subdir-makefiles,$(pxa_dirs))
 
 endif
 endif

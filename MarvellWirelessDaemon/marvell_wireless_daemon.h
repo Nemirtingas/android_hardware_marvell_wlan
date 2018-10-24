@@ -18,7 +18,7 @@
 * of the Materials, either expressly, by implication, inducement, estoppel or
 * otherwise. Any license under such intellectual property rights must be
 * express and approved by Marvell in writing.
-* 
+*
 */
 
 #ifndef _MARVELL_WIRELESS_DAEMON
@@ -60,7 +60,7 @@ int create_hci_sock();
 int wait_interface_ready (const char* interface_path, int us_interval, int retry);
 static void kill_handler(int sig);
 int bt_calibrate(void);
-int wifi_calibrate(void);    
+int wifi_calibrate(void);
 
 int init_module (void *, unsigned long, const char *);
 int delete_module (const char*, unsigned int);

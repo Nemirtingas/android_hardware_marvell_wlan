@@ -24,28 +24,28 @@ LOCAL_SHARED_LIBRARIES := \
 LOCAL_MODULE:=MarvellWirelessDaemon
 LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS += -Werror
-ifdef SD8887_NEED_CALIBRATE
-LOCAL_CFLAGS += -DSD8887_NEED_CALIBRATE
-endif
+#ifdef SD8887_NEED_CALIBRATE
+#LOCAL_CFLAGS += -DSD8887_NEED_CALIBRATE
+#endif
 
-LOCAL_CFLAGS += -DSD8887_CAL_ON_BOARD
+#LOCAL_CFLAGS += -DSD8887_CAL_ON_BOARD
 # Make symlinks from /system/etc/firmware/mrvl to /data/misc/wireless
-CONFIGS := \
-	wifi_init_cfg.conf \
-	bt_init_cfg.conf
-SYMLINKS := $(addprefix $(TARGET_OUT)/etc/firmware/mrvl/,$(CONFIGS))
-$(SYMLINKS): CAL_BINARY := /data/misc/wireless
-$(SYMLINKS): $(LOCAL_INSTALLED_MODULE) $(LOCAL_PATH)/Android.mk
-	@echo "Symlink: $@ -> $(CAL_BINARY)"
-	@mkdir -p $(dir $@)
-	@rm -rf $@
-	$(hide) ln -sf $(CAL_BINARY)/$(notdir $@) $@
+#CONFIGS := \
+#	wifi_init_cfg.conf \
+#	bt_init_cfg.conf
+#SYMLINKS := $(addprefix $(TARGET_OUT)/etc/firmware/mrvl/,$(CONFIGS))
+#$(SYMLINKS): CAL_BINARY := /data/misc/wireless
+#$(SYMLINKS): $(LOCAL_INSTALLED_MODULE) $(LOCAL_PATH)/Android.mk
+#	@echo "Symlink: $@ -> $(CAL_BINARY)"
+#	@mkdir -p $(dir $@)
+#	@rm -rf $@
+#	$(hide) ln -sf $(CAL_BINARY)/$(notdir $@) $@
 
-ALL_DEFAULT_INSTALLED_MODULES += $(SYMLINKS)
+#ALL_DEFAULT_INSTALLED_MODULES += $(SYMLINKS)
 
 # We need this so that the installed files could be picked up based on the
 # local module name
-ALL_MODULES.$(LOCAL_MODULE).INSTALLED := \
-    $(ALL_MODULES.$(LOCAL_MODULE).INSTALLED) $(SYMLINKS)
+#ALL_MODULES.$(LOCAL_MODULE).INSTALLED := \
+#    $(ALL_MODULES.$(LOCAL_MODULE).INSTALLED) $(SYMLINKS)
     
 include $(BUILD_EXECUTABLE)
