@@ -19,8 +19,3 @@ LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS += -Werror
 LOCAL_PRELINK_MODULE := false
 include $(BUILD_SHARED_LIBRARY)
-
-
-
-
-

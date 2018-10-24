@@ -43,65 +43,74 @@
 #define MAX_DRV_ARG_SIZE   128
 
 
-static int wireless_send_command(const char *cmd);
+static int wireless_send_command(const char *cmd, char *reply_buffer, int reply_buffer_size);
 static int cli_conn (const char *name);
 
-static const char *local_socket_dir = "/data/misc/wifi/sockets/socket_daemon";
+static const char *local_socket_dir = "/data/misc/wireless/socket_daemon";
 /* interfaces implements for wifi,uAP,bluetooth, FMradio*/
 int wifi_enable(void)
 {
-    return wireless_send_command("WIFI_ENABLE");
+    return wireless_send_command("WIFI_ENABLE",0,0);
 }
 int wifi_disable(void)
 {
-    return wireless_send_command("WIFI_DISABLE");
+    return wireless_send_command("WIFI_DISABLE",0,0);
 }
 int uap_enable(void)
 {
-    return wireless_send_command("UAP_ENABLE");
+    return wireless_send_command("UAP_ENABLE",0,0);
 }
 int uap_disable(void)
 {
-    return wireless_send_command("UAP_DISABLE");
+    return wireless_send_command("UAP_DISABLE",0,0);
 }
 
 int bluetooth_enable(void)
 {
-    return wireless_send_command("BT_ENABLE");
+    return wireless_send_command("BT_ENABLE",0,0);
 }
 int bluetooth_disable(void)
 {
-    return wireless_send_command("BT_DISABLE");
+    return wireless_send_command("BT_DISABLE",0,0);
 }
 
 int bluetooth_poweron(void)
 {
-    return wireless_send_command("BT_ON");
+    return wireless_send_command("BT_ON",0,0);
 }
 
 int bluetooth_poweroff(void)
 {
-    return wireless_send_command("BT_OFF");
+    return wireless_send_command("BT_OFF",0,0);
 }
 
 int fm_enable(void)
 {
-    return wireless_send_command("FM_ENABLE");
+    return wireless_send_command("FM_ENABLE",0,0);
 }
 int fm_disable(void)
 {
-    return wireless_send_command("FM_DISABLE");
+    return wireless_send_command("FM_DISABLE",0,0);
+}
+int nfc_enable(void)
+{
+    return wireless_send_command("NFC_ENABLE",0,0);
+}
+int nfc_disable(void)
+{
+    return wireless_send_command("NFC_DISABLE",0,0);
 }
 int wifi_set_drv_arg(const char * wifi_drv_arg)
 {
     char wifi_drvarg[MAX_DRV_ARG_SIZE] = "WIFI_DRV_ARG ";
+
     if (strlen(wifi_drv_arg) >= (MAX_DRV_ARG_SIZE - strlen(wifi_drvarg))) {
         ALOGE("The wifi driver arg[%s] is too long( >= %d )!", wifi_drv_arg,
                 MAX_DRV_ARG_SIZE - strlen(wifi_drvarg));
         return -1;
     }
 
-    return wireless_send_command(strcat(wifi_drvarg, wifi_drv_arg));
+    return wireless_send_command(strcat(wifi_drvarg, wifi_drv_arg),0,0);
 }
 int bt_set_drv_arg(const char * bt_drv_arg)
 {
@@ -112,23 +121,30 @@ int bt_set_drv_arg(const char * bt_drv_arg)
         return -1;
     }
 
-    return wireless_send_command(strcat(bt_drvarg, bt_drv_arg));
+    return wireless_send_command(strcat(bt_drvarg, bt_drv_arg),0,0);
 }
 
-int wifi_uap_force_poweroff() {
-    return wireless_send_command("WIFI_UAP_FORCE_POWER_OFF");
-}
-
-int bt_fm_force_poweroff() {
-    return wireless_send_command("BT_FM_FORCE_POWER_OFF");
+int mrvl_sd8xxx_force_poweroff()
+{
+    return wireless_send_command("MRVL_SD8XXX_FORCE_POWER_OFF",0,0);
 }
 
 int wifi_get_fwstate() {
-    return wireless_send_command("WIFI_GET_FWSTATE");
+    return wireless_send_command("WIFI_GET_FWSTATE",0,0);
+}
+
+int wifi_get_card_type(char *reply, int reply_size)
+{
+    if( reply == NULL )
+        return -1;
+    if( wireless_send_command("GET_CARD_TYPE", reply, reply_size) )
+        return -1;
+
+    return 0;
 }
 
 /*send wireless command:wifi,uAP,Bluetooth,FM enable/disable commands to marvell wireless daemon*/
-static int wireless_send_command(const char *cmd)
+static int wireless_send_command(const char *cmd, char *reply_buffer, int reply_size)
 {
     int conn_fd = -1;
     int n = 0;
@@ -137,6 +153,7 @@ static int wireless_send_command(const char *cmd)
     char buffer[256];
     int len = 0;
     int ret = 1;
+    char *pos;
 
     conn_fd = cli_conn (local_socket_dir);
     if (conn_fd < 0) {
@@ -179,10 +196,32 @@ static int wireless_send_command(const char *cmd)
     }
     else 
     {
-        if(!strncmp(buffer,"0,OK", strlen("0,OK")))
-            ret = 0;
-        else
+        if(strncmp(buffer,"0,OK", strlen("0,OK")))
             ret = 1;
+        else
+        {
+            if( reply_buffer )
+            {
+                pos = strchr(buffer, ' ');
+                if( !pos )
+                {
+                    ret = -1;
+                }
+                else
+                {
+                    len = strlen(pos+1);
+                    if( reply_size > len )
+                    {
+                        strncpy(reply_buffer, pos+1, len);
+                        ret = 0;
+                    }
+                    else
+                    {
+                        ALOGE("reply length exceeds provided buffer size");
+                    }
+                }
+            }
+        }
     }
 out:
     close(conn_fd);
