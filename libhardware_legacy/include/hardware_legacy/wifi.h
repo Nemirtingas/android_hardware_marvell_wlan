@@ -154,6 +154,13 @@ int wifi_set_mode(int mode);
 #define WIFI_ENTROPY_FILE	"/data/misc/wifi/entropy.bin"
 int ensure_entropy_file_exists();
 
+/**
+ * Marvell Stuff
+ */
+void wifi_get_nvram_path_builtin(char *calpath);
+int wifi_change_nvram_path(const char *calpath);
+int wifi_set_fw_type(int type);
+
 #if __cplusplus
 };  // extern "C"
 #endif

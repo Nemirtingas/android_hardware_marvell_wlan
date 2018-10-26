@@ -12,6 +12,9 @@ int bluetooth_poweroff(void);
 int bt_set_drv_arg(const char * bt_drv_arg);
 int fm_enable(void);
 int fm_disable(void);
+int mrvl_sd8xxx_force_poweroff();
+int wifi_get_fwstate();
+int wifi_get_card_type(char *reply, int reply_size);
 
 /* Force marvell wireless chip power off
   * Return value:

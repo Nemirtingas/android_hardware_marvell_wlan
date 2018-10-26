@@ -44,6 +44,12 @@ int vibrator_on(int timeout_ms);
  */
 int vibrator_off();
 
+/**
+ * Marvell stuff
+ */
+int vibrator_intensity(int intensity);
+int vibrator_intensity_node_exist();
+
 #if __cplusplus
 }  // extern "C"
 #endif

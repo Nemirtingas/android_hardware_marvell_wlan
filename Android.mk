@@ -21,7 +21,8 @@ ifeq ($(TARGET_BOARD_SOC), pxa1908)
 
 pxa_dirs := \
 	MarvellWirelessDaemon \
-    libMarvellWireless
+    libMarvellWireless \
+    libhardware_legacy
 
 include $(call all-named-subdir-makefiles,$(pxa_dirs))
 

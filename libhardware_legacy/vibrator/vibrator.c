@@ -73,3 +73,31 @@ int vibrator_off()
 {
     return sendit(0);
 }
+
+int vibrator_intensity(int intensity)
+{
+    int nwr, ret, fd;
+    char value[20];
+
+    fd = open(THE_DEVICE, O_RDWR);
+    if( fd < 0 )
+        return errno;
+
+    nwr = sprintf(value, "%d\n", intensity);
+    ret = write(fd, value, nwr);
+
+    close(fd);
+
+    return (ret == nwr) ? 0 : -1;
+}
+
+int vibrator_intensity_node_exist()
+{
+    int fd;
+    fd = open(THE_DEVICE, O_RDWR);
+    if(fd < 0 )
+        return 0;
+
+    close(fd);
+    return 1;
+}

@@ -50,6 +50,8 @@
 #include <sys/_system_properties.h>
 #endif
 
+#include <marvell_wireless.h>
+
 extern int do_dhcp();
 extern int ifc_init();
 extern void ifc_close();
@@ -234,11 +236,13 @@ int do_dhcp_request(int *ipaddr, int *gateway, int *mask,
     return 0;
 }
 
-const char *get_dhcp_error_string() {
+const char *get_dhcp_error_string()
+{
     return dhcp_lasterror();
 }
 
-int is_wifi_driver_loaded() {
+int is_wifi_driver_loaded()
+{
     char driver_status[PROPERTY_VALUE_MAX];
 #ifdef WIFI_DRIVER_MODULE_PATH
     FILE *proc;
@@ -309,8 +313,62 @@ int wifi_unload_driver()
     return ret;
 }
 
-int copy_from_file()
+int copy_from_file(const char* src, const char* dst)
 {
+    int fdsrc, fddst;
+    int len_read;
+    char buf[2048];
+
+    fdsrc = TEMP_FAILURE_RETRY(open(src, O_RDONLY));
+    if( fdsrc < 0 )
+    {
+        ALOGE("Cannot open \"%s\": %s", src, strerror(errno));
+        return -1;
+    }
+    //fddst = TEMP_FAILURE_RETRY(open(dst, O_CREAT|O_RDWR));
+    fddst = TEMP_FAILURE_RETRY(open(dst, O_RDWR|O_TRUNC));
+    if( fddst < 0 )
+    {
+        close(fdsrc);
+        ALOGE("Cannot create \"%s\": %s", dst, strerror(errno));
+        return -1;
+    }
+    while( 1 )
+    {
+        len_read = TEMP_FAILURE_RETRY(read(fdsrc, buf, 2048));
+        if( len_read == -1 )
+        {
+            ALOGE("Error reading \"%s\": %s", src, strerror(errno));
+            close(fdsrc);
+            close(fddst);
+            unlink(dst);
+            return -1;
+        }
+        if( !len_read )
+            break;
+
+        TEMP_FAILURE_RETRY(write(fddst, buf, len_read));
+    }
+    if( chmod(dst, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
+    {
+        ALOGE("Error changing permissions of %s to 0660: %s", dst, strerror(errno));
+        close(fdsrc);
+        close(fddst);
+        unlink(dst);
+        return -1;
+    }
+    if( chown(dst, AID_SYSTEM, AID_WIFI) )
+    {
+        ALOGE("Error changing group ownership of %s to %d: %s", dst, AID_WIFI, strerror(errno));
+        close(fdsrc);
+        close(fddst);
+        unlink(dst);
+        return -1;
+    }
+    fsync(fddst);
+    close(fdsrc);
+    close(fddst);
+    return 0;
 }
 
 int ensure_entropy_file_exists()
@@ -365,77 +423,65 @@ int ensure_config_file_exists(const char *config_file)
     int nread;
     int ret;
 
-    ret = access(SUPP_MRVL_CONFIG_TEMPLATE, R_OK|W_OK);
-    if( ret )
+    if( access(SUPP_MRVL_CONFIG_TEMPLATE, R_OK|W_OK) )
     {
-        if( errno != EACCES )
-        {
-            if( errno != ENOENT )
-            {
-                ALOGE("Cannot access \"%s\": %s", SUPP_MRVL_CONFIG_TEMPLATE, strerror(errno));
-            }
-            else
-            {
-                copy_from_file(SUPP_CONFIG_TEMPLATE, SUPP_MRVL_CONFIG_TEMPLATE);
-            }
-        }
-        else
-        {
-            if( chmod(SUPP_MRVL_CONFIG_TEMPLATE, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
-            {
+        // If we don't have permissions to Read or Write the file, try to set the permissions
+        if( errno == EACCES && chmod(SUPP_MRVL_CONFIG_TEMPLATE, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
                 ALOGE("Cannot set RW to \"%s\": %s", SUPP_MRVL_CONFIG_TEMPLATE, strerror(errno));
-            }
-        }
+        // File is missing, so try to copy it from config template
+        else if( errno == ENOENT )
+            copy_from_file(SUPP_CONFIG_TEMPLATE, SUPP_MRVL_CONFIG_TEMPLATE);
+        // It exists but we just can't Read or Write it
+        else
+            ALOGE("Cannot access \"%s\": %s", SUPP_MRVL_CONFIG_TEMPLATE, strerror(errno));
     }
     else
     {
+        // File exists but we can't 'stat' it
         if( stat(SUPP_MRVL_CONFIG_TEMPLATE, &sb) )
-        {
             copy_from_file(SUPP_CONFIG_TEMPLATE, SUPP_MRVL_CONFIG_TEMPLATE);
-        }
         else
         {
+            // Set file permissions
             if( chmod(SUPP_MRVL_CONFIG_TEMPLATE, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
             {
-                ALOGE("Error changing permissions of %s to 0660: %s", SUPP_MRVL_CONFIG_TEMPLATE);
+                ALOGE("Error changing permissions of %s to 0660: %s", SUPP_MRVL_CONFIG_TEMPLATE, strerror(errno));
                 return -1;
             }
+            // Set file UID/GID
             if( chown(SUPP_MRVL_CONFIG_TEMPLATE, AID_SYSTEM, AID_WIFI) )
             {
-                ALOGE("Error changing group ownership of %s to %d: %s", SUPP_MRVL_CONFIG_TEMPLATE);
+                ALOGE("Error changing group ownership of %s to %d: %s", SUPP_MRVL_CONFIG_TEMPLATE, AID_WIFI, strerror(errno));
                 return -1;
             }
         }
     }
 
     ret = access(config_file, R_OK|W_OK);
-    if( ret )
+    // If we have access or if its an access error
+    if( ret == 0 || errno == EACCES )
     {
-        if( errno == EACCES )
+        // If we have an access error, try to change permissions
+        if( ret != 0 && chmod(config_file, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) != 0 )
         {
-            if( chmod(config_file, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
-            {
-                ALOGE("Cannot set RW to \"%s\": %s", config_file, strerror(errno));
-                return -1;
-            }
+            ALOGE("Cannot set RW to \"%s\": %s", config_file, strerror(errno));
+            return -1;
         }
-    }
-    if( chmod(config_file, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) == 0 )
-    {
+        // Try to change permissions
+        if( chmod(config_file, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
+        {
+            ALOGE("Error changing permissions of %s to 0660: %s", config_file, strerror(errno));
+            return -1;
+        }
+        // Try to set UID/GID
         if( chown(config_file, AID_SYSTEM, AID_WIFI) )
         {
             ALOGE("Error changing group ownership of %s to %d: %s", config_file, AID_WIFI, strerror(errno));
             return -1;
         }
-        else
-        {
-            return 0;
-        }
-
-        ALOGE("Error changing permissions of %s to 0660: %s", config_file, strerror(errno));
-        return -1;
+        return 0;
     }
-    if( errno != ENOENT )
+    else if( errno != ENOENT )
     {
         ALOGE("Cannot access \"%s\": %s", config_file, strerror(errno));
         return -1;
@@ -443,8 +489,24 @@ int ensure_config_file_exists(const char *config_file)
 
     if( access(SUPP_MRVL_CONFIG_BKP_TEMPLATE, R_OK|W_OK) )
     {
+        if( errno != EACCES )
+        {
+            if( errno != ENOENT )
+            {
+                ALOGE("Cannot access \"%s\": %s", SUPP_MRVL_CONFIG_BKP_TEMPLATE, strerror(errno));
+                return copy_from_file(SUPP_CONFIG_TEMPLATE, config_file);
+            }
+            unlink(SUPP_MRVL_CONFIG_BKP_TEMPLATE);
+            return copy_from_file(SUPP_CONFIG_TEMPLATE, config_file);
+        }
+
+        if( chmod(SUPP_MRVL_CONFIG_BKP_TEMPLATE, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
+        {
+            ALOGE("Cannot set RW to \"%s\": %s", SUPP_MRVL_CONFIG_BKP_TEMPLATE, strerror(errno));
+            return copy_from_file(SUPP_CONFIG_TEMPLATE, config_file);
+        }
     }
-    if( stat(SUPP_MRVL_CONFIG_BKP_TEMPLATE, &sb) )
+    if( stat(SUPP_MRVL_CONFIG_BKP_TEMPLATE, &sb) == 0 )
     {
         ALOGE("Recovery %s file from %s", SUPP_MRVL_CONFIG_TEMPLATE, SUPP_MRVL_CONFIG_BKP_TEMPLATE);
         if( rename(SUPP_MRVL_CONFIG_BKP_TEMPLATE, config_file) )
@@ -913,17 +975,15 @@ int wifi_send_command(const char *cmd, char *reply, size_t *reply_len)
     if( strncmp(cmd, "SCAN_RESULTS", 12) == 0 )
     {
         start = reply;
-        end = &reply[reply_len];
-        while( 1 )
+        end = &reply[*reply_len];
+        for( ; reply <= end; )
         {
-            if( reply > end )
-                return 0;
             if( reply == end || *reply == '\n' )
             {
                 if( ++i != 1 )
                 {
                     if( reply <= start )
-                        goto WIFI_SEND_COMMAND_LABEL_2;
+                        continue;
                     str1 = reply - start;
                     str2 = start;
                     while( str2 - start < str1 )
@@ -950,7 +1010,7 @@ WIFI_SEND_COMMAND_LABEL_1:
                                     }
                                     end -= str1;
                                     reply = start;
-                                    *reply_len -= str1;
+                                    *reply_len -= (size_t)str1;
                                     goto WIFI_SEND_COMMAND_LABEL_2;
                                 }
                                 str2 += 3;
@@ -1201,6 +1261,7 @@ int wifi_change_nvram_path(const char *calpath)
 {
     int fd;
     int len;
+    int ret = 0;
     if( calpath )
     {
         fd = TEMP_FAILURE_RETRY(open(WIFI_DRIVER_NVRAM_PATH_PARAM, O_WRONLY));
@@ -1221,7 +1282,7 @@ int wifi_change_nvram_path(const char *calpath)
     {
         ALOGE("calpath is null");
     }
-    return 0;
+    return ret;
 }
 
 void wifi_get_nvram_path_builtin(char *calpath)
