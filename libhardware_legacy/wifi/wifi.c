@@ -83,6 +83,9 @@ static int exit_sockets[2];
 static int wifi_mode = 0;
 
 static char primary_iface[PROPERTY_VALUE_MAX];
+
+static int firmware_state;
+
 // TODO: use new ANDROID_SOCKET mechanism, once support for multiple
 // sockets is in
 
@@ -127,7 +130,15 @@ static const char EXT_MODULE_PATH[] = WIFI_EXT_MODULE_PATH;
 #endif
 
 #ifndef WIFI_DRIVER_FW_PATH_PARAM
-#define WIFI_DRIVER_FW_PATH_PARAM	"/sys/module/wlan/parameters/fwpath"
+#define WIFI_DRIVER_FW_PATH_PARAM	  "/sys/module/wlan/parameters/fwpath"
+#endif
+
+#ifndef WIFI_DRIVER_NVRAM_PATH_PARAM
+#define WIFI_DRIVER_NVRAM_PATH_PARAM  "/sys/module/dhd/parameters/nvram_path"
+#endif
+
+#ifndef WIFI_DRIVER_NVRAM_PATH_CONF
+#define WIFI_DRIVER_NVRAM_PATH_CONF   "/system/etc/wifi/nvram_net.txt"
 #endif
 
 #define WIFI_DRIVER_LOADER_DELAY	1000000
@@ -167,6 +178,12 @@ static char supplicant_name[PROPERTY_VALUE_MAX];
 /* Is either SUPP_PROP_NAME or P2P_PROP_NAME */
 static char supplicant_prop_name[PROPERTY_KEY_MAX];
 
+/**
+ * Marvell stuff
+ */
+static int firmware_type;
+static const char SUPP_MRVL_CONFIG_TEMPLATE[]     = "/data/misc/wifi/wpa_supplicant.bak.conf";
+static const char SUPP_MRVL_CONFIG_BKP_TEMPLATE[] = "/data/misc/wifi/wpa_supplicant.bak2.conf";
 
 #ifdef SAMSUNG_WIFI
 char* get_samsung_wifi_type()
@@ -198,42 +215,6 @@ char* get_samsung_wifi_type()
     return NULL;
 }
 #endif
-
-static int insmod(const char *filename, const char *args)
-{
-    void *module;
-    unsigned int size;
-    int ret;
-
-    module = load_file(filename, &size);
-    if (!module)
-        return -1;
-
-    ret = init_module(module, size, args);
-
-    free(module);
-
-    return ret;
-}
-
-static int rmmod(const char *modname)
-{
-    int ret = -1;
-    int maxtry = 10;
-
-    while (maxtry-- > 0) {
-        ret = delete_module(modname, O_NONBLOCK | O_EXCL);
-        if (ret < 0 && errno == EAGAIN)
-            usleep(500000);
-        else
-            break;
-    }
-
-    if (ret != 0)
-        ALOGD("Unable to unload driver module \"%s\": %s\n",
-             modname, strerror(errno));
-    return ret;
-}
 
 int do_dhcp_request(int *ipaddr, int *gateway, int *mask,
                     int *dns1, int *dns2, int *server, int *lease) {
@@ -296,92 +277,40 @@ int is_wifi_driver_loaded() {
 
 int wifi_load_driver()
 {
-#ifdef WIFI_DRIVER_MODULE_PATH
-    char driver_status[PROPERTY_VALUE_MAX];
-    int count = 100; /* wait at most 20 seconds for completion */
-    char module_arg2[256];
-#ifdef SAMSUNG_WIFI
-    char* type = get_samsung_wifi_type();
-
-    if (wifi_mode == 1) {
-        snprintf(module_arg2, sizeof(module_arg2), "%s%s", DRIVER_MODULE_AP_ARG, type == NULL ? "" : type);
-    } else {
-        snprintf(module_arg2, sizeof(module_arg2), "%s%s", DRIVER_MODULE_ARG, type == NULL ? "" : type);
-    }
-
-    if (insmod(DRIVER_MODULE_PATH, module_arg2) < 0) {
-#else
-
-    property_set(DRIVER_PROP_NAME, "loading");
-
-#ifdef WIFI_EXT_MODULE_PATH
-    if (insmod(EXT_MODULE_PATH, EXT_MODULE_ARG) < 0)
-        return -1;
-    usleep(200000);
-#endif
-
-    if (insmod(DRIVER_MODULE_PATH, DRIVER_MODULE_ARG) < 0) {
-#endif
-
-#ifdef WIFI_EXT_MODULE_NAME
-        rmmod(EXT_MODULE_NAME);
-#endif
-        return -1;
-    }
-
-    if (strcmp(FIRMWARE_LOADER,"") == 0) {
-        /* usleep(WIFI_DRIVER_LOADER_DELAY); */
-        property_set(DRIVER_PROP_NAME, "ok");
-    }
-    else {
-        property_set("ctl.start", FIRMWARE_LOADER);
-    }
-    sched_yield();
-    while (count-- > 0) {
-        if (property_get(DRIVER_PROP_NAME, driver_status, NULL)) {
-            if (strcmp(driver_status, "ok") == 0)
-                return 0;
-            else if (strcmp(driver_status, "failed") == 0) {
-                wifi_unload_driver();
-                return -1;
-            }
+    int ret;
+    int retries = 1;
+    while( retries != 3 )
+    {
+        ret = wifi_enable();
+        ALOGD("wifi_enable, ret: 0x%x", ret);
+        if( !ret )
+            break;
+        ALOGD("Fail to enable WIFI the [%d] time, force power off", retries++);
+        if( mrvl_sd8xxx_force_poweroff() )
+        {
+            wifi_disable();
+            break;
         }
-        usleep(200000);
     }
-    property_set(DRIVER_PROP_NAME, "timeout");
-    wifi_unload_driver();
-    return -1;
-#else
-    property_set(DRIVER_PROP_NAME, "ok");
-    return 0;
-#endif
+    return ret;
 }
 
 int wifi_unload_driver()
 {
-    usleep(200000); /* allow to finish interface down */
-#ifdef WIFI_DRIVER_MODULE_PATH
-    if (rmmod(DRIVER_MODULE_NAME) == 0) {
-        int count = 20; /* wait at most 10 seconds for completion */
-        while (count-- > 0) {
-            if (!is_wifi_driver_loaded())
-                break;
-            usleep(500000);
-        }
-        usleep(500000); /* allow card removal */
-        if (count) {
-#ifdef WIFI_EXT_MODULE_NAME
-            if (rmmod(EXT_MODULE_NAME) == 0)
-#endif
-            return 0;
-        }
-        return -1;
-    } else
-        return -1;
-#else
-    property_set(DRIVER_PROP_NAME, "unloaded");
-    return 0;
-#endif
+    int ret;
+    ret = wifi_disable();
+    ALOGD("wifi_disable, ret: 0x%x", ret);
+    if( ret )
+    {
+        ALOGD("Fail to disable WIFI, force power off");
+        if( !mrvl_sd8xxx_force_poweroff() )
+            ret = 0;
+    }
+    return ret;
+}
+
+int copy_from_file()
+{
 }
 
 int ensure_entropy_file_exists()
@@ -436,61 +365,94 @@ int ensure_config_file_exists(const char *config_file)
     int nread;
     int ret;
 
+    ret = access(SUPP_MRVL_CONFIG_TEMPLATE, R_OK|W_OK);
+    if( ret )
+    {
+        if( errno != EACCES )
+        {
+            if( errno != ENOENT )
+            {
+                ALOGE("Cannot access \"%s\": %s", SUPP_MRVL_CONFIG_TEMPLATE, strerror(errno));
+            }
+            else
+            {
+                copy_from_file(SUPP_CONFIG_TEMPLATE, SUPP_MRVL_CONFIG_TEMPLATE);
+            }
+        }
+        else
+        {
+            if( chmod(SUPP_MRVL_CONFIG_TEMPLATE, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
+            {
+                ALOGE("Cannot set RW to \"%s\": %s", SUPP_MRVL_CONFIG_TEMPLATE, strerror(errno));
+            }
+        }
+    }
+    else
+    {
+        if( stat(SUPP_MRVL_CONFIG_TEMPLATE, &sb) )
+        {
+            copy_from_file(SUPP_CONFIG_TEMPLATE, SUPP_MRVL_CONFIG_TEMPLATE);
+        }
+        else
+        {
+            if( chmod(SUPP_MRVL_CONFIG_TEMPLATE, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
+            {
+                ALOGE("Error changing permissions of %s to 0660: %s", SUPP_MRVL_CONFIG_TEMPLATE);
+                return -1;
+            }
+            if( chown(SUPP_MRVL_CONFIG_TEMPLATE, AID_SYSTEM, AID_WIFI) )
+            {
+                ALOGE("Error changing group ownership of %s to %d: %s", SUPP_MRVL_CONFIG_TEMPLATE);
+                return -1;
+            }
+        }
+    }
+
     ret = access(config_file, R_OK|W_OK);
-    if ((ret == 0) || (errno == EACCES)) {
-        if ((ret != 0) &&
-            (chmod(config_file, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) != 0)) {
-            ALOGE("Cannot set RW to \"%s\": %s", config_file, strerror(errno));
+    if( ret )
+    {
+        if( errno == EACCES )
+        {
+            if( chmod(config_file, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
+            {
+                ALOGE("Cannot set RW to \"%s\": %s", config_file, strerror(errno));
+                return -1;
+            }
+        }
+    }
+    if( chmod(config_file, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) == 0 )
+    {
+        if( chown(config_file, AID_SYSTEM, AID_WIFI) )
+        {
+            ALOGE("Error changing group ownership of %s to %d: %s", config_file, AID_WIFI, strerror(errno));
             return -1;
         }
-        return 0;
-    } else if (errno != ENOENT) {
+        else
+        {
+            return 0;
+        }
+
+        ALOGE("Error changing permissions of %s to 0660: %s", config_file, strerror(errno));
+        return -1;
+    }
+    if( errno != ENOENT )
+    {
         ALOGE("Cannot access \"%s\": %s", config_file, strerror(errno));
         return -1;
     }
 
-    srcfd = TEMP_FAILURE_RETRY(open(SUPP_CONFIG_TEMPLATE, O_RDONLY));
-    if (srcfd < 0) {
-        ALOGE("Cannot open \"%s\": %s", SUPP_CONFIG_TEMPLATE, strerror(errno));
-        return -1;
+    if( access(SUPP_MRVL_CONFIG_BKP_TEMPLATE, R_OK|W_OK) )
+    {
+    }
+    if( stat(SUPP_MRVL_CONFIG_BKP_TEMPLATE, &sb) )
+    {
+        ALOGE("Recovery %s file from %s", SUPP_MRVL_CONFIG_TEMPLATE, SUPP_MRVL_CONFIG_BKP_TEMPLATE);
+        if( rename(SUPP_MRVL_CONFIG_BKP_TEMPLATE, config_file) )
+            ALOGE("Fail to rename %s to %s. Original file may be existed", SUPP_MRVL_CONFIG_BKP_TEMPLATE, config_file);
     }
 
-    destfd = TEMP_FAILURE_RETRY(open(config_file, O_CREAT|O_RDWR, 0660));
-    if (destfd < 0) {
-        close(srcfd);
-        ALOGE("Cannot create \"%s\": %s", config_file, strerror(errno));
-        return -1;
-    }
-
-    while ((nread = TEMP_FAILURE_RETRY(read(srcfd, buf, sizeof(buf)))) != 0) {
-        if (nread < 0) {
-            ALOGE("Error reading \"%s\": %s", SUPP_CONFIG_TEMPLATE, strerror(errno));
-            close(srcfd);
-            close(destfd);
-            unlink(config_file);
-            return -1;
-        }
-        TEMP_FAILURE_RETRY(write(destfd, buf, nread));
-    }
-
-    close(destfd);
-    close(srcfd);
-
-    /* chmod is needed because open() didn't set permisions properly */
-    if (chmod(config_file, 0660) < 0) {
-        ALOGE("Error changing permissions of %s to 0660: %s",
-             config_file, strerror(errno));
-        unlink(config_file);
-        return -1;
-    }
-
-    if (chown(config_file, AID_SYSTEM, AID_WIFI) < 0) {
-        ALOGE("Error changing group ownership of %s to %d: %s",
-             config_file, AID_WIFI, strerror(errno));
-        unlink(config_file);
-        return -1;
-    }
-    return 0;
+    unlink(SUPP_MRVL_CONFIG_BKP_TEMPLATE);
+    return copy_from_file(SUPP_CONFIG_TEMPLATE, config_file);
 }
 
 #ifdef USES_TI_MAC80211
@@ -716,6 +678,11 @@ int wifi_start_supplicant(int p2p_supported)
     unsigned serial = 0, i;
 #endif
 
+    firmware_state = 0;
+
+    if( wifi_get_fwstate() && (wifi_unload_driver() || wifi_load_driver()) )
+        return -1;
+
     if (p2p_supported) {
         strcpy(supplicant_name, P2P_SUPPLICANT_NAME);
         strcpy(supplicant_prop_name, P2P_PROP_NAME);
@@ -903,22 +870,105 @@ int wifi_connect_to_supplicant()
 int wifi_send_command(const char *cmd, char *reply, size_t *reply_len)
 {
     int ret;
-    if (ctrl_conn == NULL) {
-        ALOGV("Not connected to wpa_supplicant - \"%s\" command dropped.\n", cmd);
-        return -1;
-    }
-    ret = wpa_ctrl_request(ctrl_conn, cmd, strlen(cmd), reply, reply_len, NULL);
-    if (ret == -2) {
-        ALOGD("'%s' command timed out.\n", cmd);
-        /* unblocks the monitor receive socket for termination */
-        TEMP_FAILURE_RETRY(write(exit_sockets[0], "T", 1));
+    int cmd_len;
+    int i = 0;
+    char *start;
+    char *end;
+    char *str1,*str2,*str3;
+
+    if( firmware_state == 1 )
+    {
+        ALOGD("WiFi firmware hans: Skip command '%s'\n", cmd);
         return -2;
-    } else if (ret < 0 || strncmp(reply, "FAIL", 4) == 0) {
+    }
+    if( !ctrl_conn )
         return -1;
+
+    cmd_len = strlen(cmd);
+    ret = wpa_ctrl_request(ctrl_conn, cmd, cmd_len, reply, reply_len, NULL);
+    if( ret < 0 || strncmp(reply, "FAIL", 4) == 0)
+    {
+        firmware_state = wifi_get_fwstate();
+        if( firmware_state == 1 )
+        {
+            ALOGE("'%s' command timed out or failed, try to recovery Wi-Fi.\n", cmd);
+            mrvl_sd8xxx_force_poweroff();
+            while( write(exit_sockets[0], "T", 1) == -1 && errno == EINTR );
+            return -2;
+        }
+        if( ret == -2 )
+        {
+            ALOGD("'%s' command timed out.\n", cmd);
+            while( write(exit_sockets[0], "T", 1) == -1 && errno == EINTR );
+            return -2;
+        }
+        if( ret < 0 )
+            return -1;
     }
-    if (strncmp(cmd, "PING", 4) == 0) {
-        reply[*reply_len] = '\0';
+    if( strncmp(reply, "FAIL", 4) == 0 )
+        return -1;
+    if( strncmp(cmd, "PING", 4) == 0 )
+        reply[*reply_len] = 0;
+
+    if( strncmp(cmd, "SCAN_RESULTS", 12) == 0 )
+    {
+        start = reply;
+        end = &reply[reply_len];
+        while( 1 )
+        {
+            if( reply > end )
+                return 0;
+            if( reply == end || *reply == '\n' )
+            {
+                if( ++i != 1 )
+                {
+                    if( reply <= start )
+                        goto WIFI_SEND_COMMAND_LABEL_2;
+                    str1 = reply - start;
+                    str2 = start;
+                    while( str2 - start < str1 )
+                    {
+                        if( str2[0] & 0x80 )
+                        {
+                            if( (str2[0] & 0xE0) == 0xC0 )
+                            {
+                                if( (str2[1] & 0xC0) != 0x80 )
+                                {
+                                    goto WIFI_SEND_COMMAND_LABEL_1;
+                                }
+                                str2 += 2;
+                            }
+                            else
+                            {
+                                if( (str2[0] & 0xF0) != 0xE0 || (str2[1] & 0xC0) != 0x80 || (str2[2] & 0xC0) != 0x80 )
+                                {
+WIFI_SEND_COMMAND_LABEL_1:
+                                    str3 = start;
+                                    while( reply != end )
+                                    {
+                                        *str3++ = (reply++)[1];
+                                    }
+                                    end -= str1;
+                                    reply = start;
+                                    *reply_len -= str1;
+                                    goto WIFI_SEND_COMMAND_LABEL_2;
+                                }
+                                str2 += 3;
+                            }
+                        }
+                        else
+                        {
+                            ++str2;
+                        }
+                    }
+                }
+                start = reply + 1;
+            }
+WIFI_SEND_COMMAND_LABEL_2:
+            ++reply;
+        }
     }
+
     return 0;
 }
 
@@ -982,6 +1032,7 @@ int wifi_wait_on_socket(char *buf, size_t buflen)
     char *match, *match2;
 
     if (monitor_conn == NULL) {
+        ALOGW("connection closed - 1\n");
         return snprintf(buf, buflen, "IFNAME=%s %s - connection closed",
                         primary_iface, WPA_EVENT_TERMINATING);
     }
@@ -990,6 +1041,7 @@ int wifi_wait_on_socket(char *buf, size_t buflen)
 
     /* Terminate reception on exit socket */
     if (result == -2) {
+        ALOGW("connection closed - 2\n");
         return snprintf(buf, buflen, "IFNAME=%s %s - connection closed",
                         primary_iface, WPA_EVENT_TERMINATING);
     }
@@ -1010,9 +1062,9 @@ int wifi_wait_on_socket(char *buf, size_t buflen)
     /*
      * Events strings are in the format
      *
-     *     IFNAME=iface <N>CTRL-EVENT-XXX 
+     *     IFNAME=iface <N>CTRL-EVENT-XXX
      *        or
-     *     <N>CTRL-EVENT-XXX 
+     *     <N>CTRL-EVENT-XXX
      *
      * where N is the message level in numerical form (0=VERBOSE, 1=DEBUG,
      * etc.) and XXX is the event name. The level information is not useful
@@ -1098,13 +1150,15 @@ int wifi_command(const char *command, char *reply, size_t *reply_len)
 
 const char *wifi_get_fw_path(int fw_type)
 {
-    switch (fw_type) {
+    switch (fw_type){
     case WIFI_GET_FW_PATH_STA:
         return WIFI_DRIVER_FW_PATH_STA;
     case WIFI_GET_FW_PATH_AP:
         return WIFI_DRIVER_FW_PATH_AP;
     case WIFI_GET_FW_PATH_P2P:
         return WIFI_DRIVER_FW_PATH_P2P;
+    case 3:
+        return "/system/etc/wifi/bcmdhd_ibss.bin";
     }
     return NULL;
 }
@@ -1114,6 +1168,9 @@ int wifi_change_fw_path(const char *fwpath)
     int len;
     int fd;
     int ret = 0;
+    char builtin_nvram_path[256] = {0};
+
+    ALOGI("wifi_change_fw_path(): fw_path = %s", fwpath);
 
     if (!fwpath)
         return ret;
@@ -1128,10 +1185,71 @@ int wifi_change_fw_path(const char *fwpath)
         ret = -1;
     }
     close(fd);
+
+    wifi_get_nvram_path_builtin(builtin_nvram_path);
+    ALOGI("wifi_change_nvram_path() = %s", builtin_nvram_path);
+    if( wifi_change_nvram_path(builtin_nvram_path) < 0 )
+    {
+        ALOGE("wifi_change_nvram_path() failed!!");
+        ret = -1;
+    }
+
     return ret;
 }
 
-int wifi_set_mode(int mode) {
-    wifi_mode = mode;
+int wifi_change_nvram_path(const char *calpath)
+{
+    int fd;
+    int len;
+    if( calpath )
+    {
+        fd = TEMP_FAILURE_RETRY(open(WIFI_DRIVER_NVRAM_PATH_PARAM, O_WRONLY));
+        ALOGE("TEMP_FAILURE_RETRY complete");
+        if( fd < 0 )
+        {
+            ALOGE("Failed to open wlan nvram path param (%s)", strerror(errno));
+            return -1;
+        }
+        len = strlen(calpath) + 1;
+        if (TEMP_FAILURE_RETRY(write(fd, calpath, len)) != len) {
+            ALOGE("Failed to write wlan nvram path param (%s)", strerror(errno));
+            ret = -1;
+        }
+        close(fd);
+    }
+    else
+    {
+        ALOGE("calpath is null");
+    }
     return 0;
 }
+
+void wifi_get_nvram_path_builtin(char *calpath)
+{
+    strcpy(calpath, WIFI_DRIVER_NVRAM_PATH_CONF);
+}
+
+int wifi_set_fw_type(int type)
+{
+    firmware_type = type;
+    ALOGE("##################### set firmware type %d #####################", type);
+    return 0;
+}
+
+int wifi_reset_fw_type()
+{
+    firmware_type = 0;
+    ALOGE("##################### set firmware type %d #####################", 0);
+    return 0;
+}
+
+int wifi_get_fw_type()
+{
+    return firmware_type;
+}
+
+int wifi_stop_olsrd()
+{
+    return -1;
+}
+
