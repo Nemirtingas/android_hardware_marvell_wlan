@@ -160,6 +160,10 @@ int ensure_entropy_file_exists();
 void wifi_get_nvram_path_builtin(char *calpath);
 int wifi_change_nvram_path(const char *calpath);
 int wifi_set_fw_type(int type);
+int wifi_get_fw_type();
+int wifi_reset_fw_type();
+int wifi_stop_olsrd();
+int wifi_start_olsrd();
 
 #if __cplusplus
 };  // extern "C"

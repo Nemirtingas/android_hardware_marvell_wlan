@@ -1290,6 +1290,11 @@ void wifi_get_nvram_path_builtin(char *calpath)
     strcpy(calpath, WIFI_DRIVER_NVRAM_PATH_CONF);
 }
 
+int wifi_set_mode(int mode)
+{
+    return wifi_set_fw_type(mode);
+}
+
 int wifi_set_fw_type(int type)
 {
     firmware_type = type;
@@ -1307,6 +1312,11 @@ int wifi_reset_fw_type()
 int wifi_get_fw_type()
 {
     return firmware_type;
+}
+
+int wifi_start_olsrd()
+{
+    return -1;
 }
 
 int wifi_stop_olsrd()
