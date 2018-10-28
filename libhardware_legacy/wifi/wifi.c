@@ -325,8 +325,8 @@ int copy_from_file(const char* src, const char* dst)
         ALOGE("Cannot open \"%s\": %s", src, strerror(errno));
         return -1;
     }
-    //fddst = TEMP_FAILURE_RETRY(open(dst, O_CREAT|O_RDWR));
-    fddst = TEMP_FAILURE_RETRY(open(dst, O_RDWR|O_TRUNC));
+    fddst = TEMP_FAILURE_RETRY(open(dst, O_CREAT|O_RDWR));
+    //fddst = TEMP_FAILURE_RETRY(open(dst, O_RDWR|O_TRUNC));
     if( fddst < 0 )
     {
         close(fdsrc);
@@ -743,7 +743,10 @@ int wifi_start_supplicant(int p2p_supported)
     firmware_state = 0;
 
     if( wifi_get_fwstate() && (wifi_unload_driver() || wifi_load_driver()) )
+    {
+        ALOGE("%s: error while getting state",__func__);
         return -1;
+    }
 
     if (p2p_supported) {
         strcpy(supplicant_name, P2P_SUPPLICANT_NAME);
@@ -984,7 +987,7 @@ int wifi_send_command(const char *cmd, char *reply, size_t *reply_len)
                 {
                     if( reply <= start )
                         continue;
-                    str1 = reply - start;
+                    str1 = (char*)(reply - start);
                     str2 = start;
                     while( str2 - start < str1 )
                     {
@@ -1008,7 +1011,7 @@ WIFI_SEND_COMMAND_LABEL_1:
                                     {
                                         *str3++ = (reply++)[1];
                                     }
-                                    end -= str1;
+                                    end = (char*)(end - str1);
                                     reply = start;
                                     *reply_len -= (size_t)str1;
                                     goto WIFI_SEND_COMMAND_LABEL_2;
@@ -1227,22 +1230,20 @@ int wifi_change_fw_path(const char *fwpath)
 {
     int len;
     int fd;
-    int ret = 0;
     char builtin_nvram_path[256] = {0};
 
     ALOGI("wifi_change_fw_path(): fw_path = %s", fwpath);
 
     if (!fwpath)
-        return ret;
+        return 1;
     fd = TEMP_FAILURE_RETRY(open(WIFI_DRIVER_FW_PATH_PARAM, O_WRONLY));
     if (fd < 0) {
         ALOGE("Failed to open wlan fw path param (%s)", strerror(errno));
-        return -1;
+        return 0;
     }
     len = strlen(fwpath) + 1;
     if (TEMP_FAILURE_RETRY(write(fd, fwpath, len)) != len) {
         ALOGE("Failed to write wlan fw path param (%s)", strerror(errno));
-        ret = -1;
     }
     close(fd);
 
@@ -1251,10 +1252,9 @@ int wifi_change_fw_path(const char *fwpath)
     if( wifi_change_nvram_path(builtin_nvram_path) < 0 )
     {
         ALOGE("wifi_change_nvram_path() failed!!");
-        ret = -1;
     }
 
-    return ret;
+    return 0;
 }
 
 int wifi_change_nvram_path(const char *calpath)

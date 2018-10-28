@@ -271,17 +271,11 @@ int write_param(const char* filepath, const char* param)
 
     if( filepath )
     {
-        while( 1 )
+        fd = TEMP_FAILURE_RETRY(open(filepath, O_WRONLY));
+        if( fd < 0 )
         {
-            fd = open(filepath, 1);
-            if( fd != -1 )
-                break;
-
-            if( errno != EINTR )
-            {
-                ALOGE("Failed to open: %s (%s) %d", filepath, strerror(errno), errno);
-                return -1;
-            }
+            ALOGE("Failed to open: %s (%s) %d", filepath, strerror(errno), errno);
+            return -1;
         }
 
         len = strlen(param) + 1;
@@ -433,7 +427,7 @@ int check_psm_info()
     int res;
     char psm;
 
-    fd = open(WIFI_DRIVER_MODULE_PSM_INFO, 0);
+    fd = open(WIFI_DRIVER_MODULE_PSM_INFO, O_RDONLY);
     if( fd >= 0 )
     {
         if( read(fd, &psm, 1) >= 0 )

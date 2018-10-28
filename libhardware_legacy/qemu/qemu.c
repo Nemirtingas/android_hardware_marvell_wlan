@@ -160,6 +160,8 @@ qemu_channel_open_tty( QemuChannel*  channel,
     char   prop[PROPERTY_VALUE_MAX];
     int    ret;
 
+    (void)mode;
+
     ret = snprintf(key, sizeof key, "ro.kernel.android.%s", name);
     if (ret >= (int)sizeof key)
         return -1;

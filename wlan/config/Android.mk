@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2016 Android For Marvell Project <ctx.xda@gmail.com>
+# Copyright (C) 2008 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,17 +14,26 @@
 # limitations under the License.
 #
 
+# Disable this module for now
+ifeq (0,1)
+
 LOCAL_PATH := $(call my-dir)
 
-ifeq ($(TARGET_BOARD_PLATFORM), mrvl)
-ifeq ($(TARGET_BOARD_SOC), pxa1908)
+########################
 
-pxa_dirs := MarvellWirelessDaemon
-pxa_dirs += libMarvellWireless
-pxa_dirs += wlan
-#pxa_dirs += libhardware_legacy
+include $(CLEAR_VARS)
+LOCAL_MODULE := dhcpcd.conf
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_PATH := $(TARGET_OUT_ETC)/dhcpcd
+LOCAL_SRC_FILES := android_dhcpcd.conf
+include $(BUILD_PREBUILT)
 
-include $(call all-named-subdir-makefiles,$(pxa_dirs))
+#########################
 
+WIFI_DRIVER_SOCKET_IFACE := wlan0
+ifeq ($(strip $(WPA_SUPPLICANT_VERSION)),VER_0_8_X)
+  include external/wpa_supplicant_8/wpa_supplicant/wpa_supplicant_conf.mk
 endif
+#######################
+
 endif

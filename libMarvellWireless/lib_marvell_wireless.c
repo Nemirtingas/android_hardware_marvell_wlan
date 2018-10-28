@@ -152,14 +152,13 @@ static int wireless_send_command(const char *cmd, char *reply_buffer, int reply_
     int data = 0;
     char buffer[256];
     int len = 0;
-    int ret = 1;
     char *pos;
 
     conn_fd = cli_conn (local_socket_dir);
-    if (conn_fd < 0) {
+    if (conn_fd < 0)
+    {
         ALOGE("cli_conn error.\n");
-        ret = 1;
-        goto out1;
+        return 1;
     }
     len = strlen(cmd);
     strncpy(buffer, cmd, len);
@@ -169,14 +168,14 @@ static int wireless_send_command(const char *cmd, char *reply_buffer, int reply_
     if (n == SOCKERR_IO) 
     {
         ALOGE("write error on fd %d\n", conn_fd);
-        ret = 1;
-        goto out;
+        close(conn_fd);
+        return 1;
     }
     else if (n == SOCKERR_CLOSED) 
     {
         ALOGE("fd %d has been closed.\n", conn_fd);
-        ret = 1;
-        goto out;
+        close(conn_fd);
+        return 1;
     }
     else 
         ALOGI("Wrote %s to server. \n", buffer);
@@ -185,48 +184,41 @@ static int wireless_send_command(const char *cmd, char *reply_buffer, int reply_
     if (n == SOCKERR_IO) 
     {
         ALOGE("read error on fd %d\n", conn_fd);
-        ret = 1;
-        goto out;
+        close(conn_fd);
+        return 1;
     }
-    else if (n == SOCKERR_CLOSED) 
+    if (n == SOCKERR_CLOSED) 
     {
         ALOGE("fd %d has been closed.\n", conn_fd);
-        ret = 1;
-        goto out;
+        close(conn_fd);
+        return 1;
     }
-    else 
+    if(strncmp(buffer,"0,OK", strlen("0,OK")))
     {
-        if(strncmp(buffer,"0,OK", strlen("0,OK")))
-            ret = 1;
-        else
-        {
-            if( reply_buffer )
-            {
-                pos = strchr(buffer, ' ');
-                if( !pos )
-                {
-                    ret = -1;
-                }
-                else
-                {
-                    len = strlen(pos+1);
-                    if( reply_size > len )
-                    {
-                        strncpy(reply_buffer, pos+1, len);
-                        ret = 0;
-                    }
-                    else
-                    {
-                        ALOGE("reply length exceeds provided buffer size");
-                    }
-                }
-            }
-        }
+        ALOGE("Received %s\n", buffer);
+        close(conn_fd);
+        return 1;
     }
-out:
+    if( reply_buffer )
+    {
+        pos = strchr(buffer, ' ');
+        if( !pos )
+        {
+            ALOGE("Didn't find ' '\n");
+            close(conn_fd);
+            return -1;
+        }
+        len = strlen(pos+1);
+        if( reply_size <= len )
+        {
+            ALOGE("reply length exceeds provided buffer size");
+            close(conn_fd);
+            return -1;
+        }
+        strncpy(reply_buffer, pos+1, len);
+    }
     close(conn_fd);
-out1:
-    return ret; 
+    return 0; 
 }
 
 /* returns fd if all OK, -1 on error */

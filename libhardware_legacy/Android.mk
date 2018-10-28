@@ -9,6 +9,8 @@ LEGACY_AUDIO_MAKEFILES := $(call all-named-subdir-makefiles,audio)
 LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
 
+LOCAL_CLANG=true
+
 LOCAL_SHARED_LIBRARIES := libcutils liblog
 
 LOCAL_INCLUDES += $(LOCAL_PATH)
