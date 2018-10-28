@@ -1051,12 +1051,9 @@ int set_power(int on)
 int mrvl_sd8xxx_force_poweroff()
 {
 	int ret = 0;
-	int v2; // r4
-	int *v3; // r0
-	char *v4; // r0
-	char buffer[92]; // [sp+8h] [bp-78h]
+	char buffer[PROP_VALUE_MAX];
 
-	memset(buffer, 0, sizeof(buffer));
+	memset(buffer, 0, PROP_VALUE_MAX);
 	property_get("persist.sys.mrvl_wl_recovery", buffer, "1");
 	if ( atoi(buffer) )
 	{
@@ -1357,9 +1354,9 @@ int get_wifi_state()
 int wifi_get_fwstate()
 {
 	int param;
-	char param_str[92];
+	char param_str[PROP_VALUE_MAX];
 	
-	memset(param_str, 0, sizeof(param));
+	memset(param_str, 0, PROP_VALUE_MAX);
 	property_get(MRVL_PROP_WL_RECOVERY, param_str, "1");
 	param = atoi(param_str);
 	if( param )
