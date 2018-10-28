@@ -38,13 +38,12 @@
 /******************************************************************************
 **  Variables
 ******************************************************************************/
-//int pFd[2] = {0,};
 bt_vendor_callbacks_t *bt_vendor_cbacks = NULL;
 uint8_t vnd_local_bd_addr[6]={0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 int bt_sock = -1;
 
 static const char BT_DEV_PATH[] = "/dev/mbtchar0";
-static const char BT_PCMMASTER_PROP[] = "persist.bt.pcmmaster"
+static const char BT_PCMMASTER_PROP[] = "persist.bt.pcmmaster";
 
 /******************************************************************************
 **  Local type definitions
@@ -168,15 +167,16 @@ int btsnd_hcic_set_pcm_link()
     return 0;
 }
 
-void bt_set_sco_codec_cback(char *buf)
+void bt_set_sco_codec_cback(void *param)
 {
+    char *buf = (char*)param;
     if( buf[13] )
     {
         ALOGE("%s: Setting Codec Failed %d", __func__, buf[13]);
     }
     else
     {
-        ALOGI("%s: OpCode 0x%04x Status %d", (short)(buf[11] + ((short)buf[12]<<8)), buf[13]);
+        ALOGI("%s: OpCode 0x%04x Status %d", __func__, (short)(buf[11] + ((short)buf[12]<<8)), buf[13]);
         bt_vendor_cbacks->dealloc(buf);
     }
 }
@@ -205,10 +205,10 @@ int bt_set_sco_codec_cmd(void *param)
             ret = bt_vendor_cbacks->xmit_cb(0xFC73, buf, bt_set_sco_codec_cback);
             if( ret )
                 return ret;
-            ret = bt_vendor_cbacks->dealloc(buf);
+            bt_vendor_cbacks->dealloc(buf);
         }
         ALOGI("%s: vendor lib postload aborted", __func__);
-        ret = bt_vendor_cbacks->scocfg_cb(BT_VND_OP_RESULT_SUCCESS);
+        bt_vendor_cbacks->scocfg_cb(BT_VND_OP_RESULT_SUCCESS);
     }
     return ret;
 }
@@ -225,7 +225,7 @@ static int bt_vnd_mrvl_if_init(const bt_vendor_callbacks_t* p_cb, unsigned char 
 
     ALOGI("%s called", __func__);
 
-    bt_vendor_cbacks = p_cb;
+    bt_vendor_cbacks = (bt_vendor_callbacks_t*)p_cb;
     if(local_bdaddr)
         for(i=0;i<6;i++)
             vnd_local_bd_addr[i] = local_bdaddr[i];

@@ -1094,7 +1094,7 @@ int bt_fm_disable(void)
 {
     int res = 0;
     /* To speed up the recovery, detect the FW status here */
-    if (wifi_get_fwstate() == FW_STATE_HUNG || (res = mrvl_sd8xxx_force_poweroff()) != 0 )
+    if (wifi_get_fwstate() != FW_STATE_HUNG || (res = mrvl_sd8xxx_force_poweroff()) != 0 )
     {
         res = set_power(0);
     }
