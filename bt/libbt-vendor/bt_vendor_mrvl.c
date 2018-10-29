@@ -29,6 +29,7 @@
 #include <utils/Log.h>
 #include <cutils/properties.h>
 #include <fcntl.h>
+#include <bt_hci_bdroid.h>
 #include "bt_vendor_lib.h"
 #include "utils.h"
 #include "marvell_wireless.h"
@@ -245,13 +246,14 @@ static int bt_vnd_mrvl_if_init(const bt_vendor_callbacks_t* p_cb, unsigned char 
 static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
 {
     int *power_state = (int*)param;
+    int *fd_array    = (int*)param;
     int ret = 0;
     int retry = 1;
 
     switch( opcode )
     {
         case BT_VND_OP_POWER_CTRL: 
-            if( *iparam == BT_VND_PWR_ON )
+            if( *power_state == BT_VND_PWR_ON )
             {
                 ALOGI("%s: power on", __func__);
                 do
@@ -264,7 +266,7 @@ static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
                 while( !mrvl_sd8xxx_force_poweroff() && retry++ < 3 );
                 bluetooth_disable();
             }
-            else if( *iparam == BT_VND_PWR_OFF )
+            else if( *power_state == BT_VND_PWR_OFF )
             {
                 ALOGI("%s: power off", __func__);
                 ret = bluetooth_disable();
@@ -308,10 +310,10 @@ static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
             else
             {
                 ALOGI("%s: open %s successfully", __func__, BT_DEV_PATH);
-                iparam[0] = mchar_fd;
-                iparam[1] = mchar_fd;
-                iparam[2] = mchar_fd;
-                iparam[3] = mchar_fd;
+                fd_array[CH_CMD]     = mchar_fd;
+                fd_array[CH_EVT]     = mchar_fd;
+                fd_array[CH_ACL_OUT] = mchar_fd;
+                fd_array[CH_ACL_IN]  = mchar_fd;
                 ret = 1;
             }
             break;
