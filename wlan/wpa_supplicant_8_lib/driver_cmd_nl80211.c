@@ -35,19 +35,15 @@ typedef struct android_wifi_priv_cmd {
 
 static int drv_errors = 0;
 
-static void wpa_driver_send_hang_msg(struct wpa_driver_nl80211_data *drv)
+int mrvl_get_power_mode(void *header, int *power_mode)
 {
-    return -1;
-}
 
-static void wpa_driver_notify_country_change(void *ctx, char *cmd)
-{
-    return -1;
 }
 
 int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf,
 				  size_t buf_len )
 {
+
     return -1;
 }
 
