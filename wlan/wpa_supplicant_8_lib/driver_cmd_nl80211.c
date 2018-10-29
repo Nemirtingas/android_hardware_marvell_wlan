@@ -17,10 +17,11 @@
 #include "android_drv.h"
 #endif
 
+#define WPA_PS_ENABLED  0
+#define WPA_PS_DISABLED 1
+
 typedef struct android_wifi_priv_cmd {
-    char *buf;
-    // Marvell struct is 16bytes
-    int x;
+    char buf[8];
     int used_len;
     int total_len;
 } android_wifi_priv_cmd;
@@ -44,15 +45,18 @@ static int wpa_driver_set_power_save(void *priv, int state)
     struct nl_msg *msg;
     int ret = -1;
     enum nl80211_ps_state ps_state;
+
     msg = nlmsg_alloc();
     if (!msg)
         return -1;
     genlmsg_put(msg, 0, 0, drv->global->nl80211_id, 0, 0,
     NL80211_CMD_SET_POWER_SAVE, 0);
+
     if (state == WPA_PS_ENABLED)
-        ps_state = NL80211_PS_ENABLED;
-    else
+		ps_state = NL80211_PS_ENABLED;
+	else
         ps_state = NL80211_PS_DISABLED;
+
     NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, drv->ifindex);
     NLA_PUT_U32(msg, NL80211_ATTR_PS_STATE, ps_state);
     ret = send_and_recv_msgs(drv, msg, NULL, NULL);
@@ -238,20 +242,20 @@ int wpa_driver_set_ap_wps_p2p_ie(void *priv, const struct wpabuf *beacon,
     buf = malloc(buf_len);
     if( buf == NULL )
     {
-        wpa_printf("%s: %s (%d)", __func__, strerror(errno), errno);
+        wpa_printf(MSG_DEBUG, "%s: %s (%d)", __func__, strerror(errno), errno);
         return errno;
     }
 
     wpa_printf(MSG_DEBUG, "%s: Entry", __func__);
     for (i = 0; cmd_arr[i].cmd != -1; i++) {
-        os_memset(buf, 0, sizeof(buf));
+        os_memset(buf, 0, sizeof(buf_len));
         pbuf = buf;
         pbuf += sprintf(pbuf, "%s %d", _cmd, cmd_arr[i].cmd);
         *pbuf++ = '\0';
         ap_wps_p2p_ie = cmd_arr[i].src ?
             wpabuf_dup(cmd_arr[i].src) : NULL;
         if (ap_wps_p2p_ie) {
-            /* Marvell code */
+            /* Marvell code, it ensures that the buffer is big enought to hold the cmd */
             // If the space left is smaller than the space we will have to copy
             if( (&buf[buf_len] - pbuf) < wpabuf_len(ap_wps_p2p_ie) )
             {
@@ -261,7 +265,7 @@ int wpa_driver_set_ap_wps_p2p_ie(void *priv, const struct wpabuf *beacon,
                 new_buf = realloc(buf, buf_len);
                 if( new_buf == NULL )
                 {
-                    wpa_printf(MSG_DEBUG, "%s: %s (%d)" __func__, strerror(errno), errno);
+                    wpa_printf(MSG_DEBUG, "%s: %s (%d)", __func__, strerror(errno), errno);
                     free(buf);
                     return errno;
                 }
