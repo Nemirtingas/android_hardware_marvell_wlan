@@ -21,7 +21,7 @@
 #define WPA_PS_DISABLED 1
 
 typedef struct android_wifi_priv_cmd {
-    char buf[8];
+    char *buf;
     int used_len;
     int total_len;
 } android_wifi_priv_cmd;
@@ -167,17 +167,17 @@ int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf, size_t buf_l
             priv_cmd.used_len = buf_len;
             priv_cmd.total_len = buf_len;
             ifr.ifr_data = &priv_cmd;
-            if ((ret = ioctl(drv->global->ioctl_sock, SIOCDEVPRIVATE + 6, &ifr)) < 0) {
+            if ((ret = ioctl(drv->global->ioctl_sock, SIOCDEVPRIVATE + 14, &ifr)) < 0) {
                 wpa_printf(MSG_ERROR, "%s: failed to issue private commands\n", __func__);
                 wpa_printf(MSG_ERROR, "the cmd is %s\n", cmd);
-                wpa_printf("the error is [%d]  [%s] \n", errno, strerror(errno));
+                wpa_printf(MSG_ERROR, "the error is [%d]  [%s] \n", errno, strerror(errno));
             } else {
                 drv_errors = 0;
                 ret = 0;
                 if ((os_strcasecmp(cmd, "LINKSPEED") == 0) ||
                     (os_strcasecmp(cmd, "RSSI") == 0) ||
                     (os_strcasecmp(cmd, "GETBAND") == 0) ||
-                    (os_strncasecmp(cmd, "WLS_BATCHING", 12) == 0 )
+                    (os_strncasecmp(cmd, "WLS_BATCHING", 12)) == 0 )
                     ret = strlen(buf);
                 else if ((os_strcasecmp(cmd, "COUNTRY")) == 0 ||
                          (os_strncasecmp(cmd, "SETBAND", 7)) == 0)
@@ -204,6 +204,7 @@ int wpa_driver_set_p2p_noa(void *priv, u8 count, int start, int duration)
 
 int wpa_driver_get_p2p_noa(void *priv, u8 *buf, size_t len)
 {
+    (void)priv,(void)buf,(void)len;
     /* Return 0 till we handle p2p_presence request completely in the driver */
     return 0;
 }
