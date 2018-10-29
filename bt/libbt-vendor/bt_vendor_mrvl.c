@@ -25,12 +25,12 @@
  ******************************************************************************/
 
 #define LOG_TAG "bluedroid-mrvl"
-//#define BLUETOOTH_MAC_ADDR_BOOT_PROPERTY "ro.boot.btmacaddr"
 
 #include <utils/Log.h>
 #include <cutils/properties.h>
 #include <fcntl.h>
-#include "bt_vendor_mrvl.h"
+#include "bt_vendor_lib.h"
+#include "utils.h"
 #include "marvell_wireless.h"
 
 #define WAIT_TIMEOUT 200000
@@ -38,12 +38,19 @@
 /******************************************************************************
 **  Variables
 ******************************************************************************/
-bt_vendor_callbacks_t *bt_vendor_cbacks = NULL;
-uint8_t vnd_local_bd_addr[6]={0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-int bt_sock = -1;
+bt_vendor_callbacks_t *vnd_cb = NULL;
+uint8_t bdaddr[6]={0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+int mchar_fd = -1;
 
 static const char BT_DEV_PATH[] = "/dev/mbtchar0";
 static const char BT_PCMMASTER_PROP[] = "persist.bt.pcmmaster";
+
+#define HCI_CMD_MARVELL_WRITE_PCM_SETTINGS      0xFC07
+#define HCI_CMD_MARVELL_SET_SCO_DATA_PATH       0xFC1D
+#define HCI_CMD_MARVELL_WRITE_BD_ADDRESS        0xFC22
+#define HCI_CMD_MARVELL_WRITE_PCM_SYNC_SETTINGS 0xFC28
+#define HCI_CMD_MARVELL_WRITE_PCM_LINK_SETTINGS 0xFC29
+#define HCI_CMD_MARVELL_SET_SCO_DATA_CODEC      0xFC73
 
 /******************************************************************************
 **  Local type definitions
@@ -55,23 +62,23 @@ static const char BT_PCMMASTER_PROP[] = "persist.bt.pcmmaster";
 ******************************************************************************/
 int btsnd_hcic_set_pcm_voice_path()
 {
-    char *buf;
+    HC_BT_HDR *p_buf;
     
-    buf = bt_vendor_cbacks->alloc(12);
-    if( buf == NULL )
+    p_buf = (HC_BT_HDR*)vnd_cb->alloc(BT_HC_HDR_SIZE);
+    if( p_buf == NULL )
         return 1;
 
-    *(short*)&buf[0] = 8192;
-    *(short*)&buf[2] = 6;
-    *(short*)&buf[4] = 0;
-    *(short*)&buf[6] = 0;
-    buf[8]  = 29;
-    buf[9]  = -4;
-    buf[10] = 1;
-    buf[11] = 1;
-    if( !bt_vendor_cbacks->xmit_cb(0xFC1D, buf, 0) )
+    p_buf->event          = MSG_STACK_TO_HC_HCI_CMD;
+    p_buf->len            = 6;
+    p_buf->offset         = 0;
+    p_buf->layer_specific = 0;
+    p_buf->data[0]        = 29;
+    p_buf->data[1]        = -4;
+    p_buf->data[2]        = 1;
+    p_buf->data[3]        = 1;
+    if( !vnd_cb->xmit_cb(HCI_CMD_MARVELL_SET_SCO_DATA_PATH, p_buf, 0) )
     {
-        bt_vendor_cbacks->dealloc(buf);
+        vnd_cb->dealloc(p_buf);
         return 1;
     }
     return 0;
@@ -81,7 +88,7 @@ int btsnd_hcic_set_pcm_sync()
 {
     char pcmmaster[PROP_VALUE_MAX];   
     int state;
-    char *buf;
+    HC_BT_HDR *p_buf;
 
     property_get(BT_PCMMASTER_PROP, pcmmaster, "1");
     if( strcmp(pcmmaster, "0") == 0 )
@@ -89,23 +96,24 @@ int btsnd_hcic_set_pcm_sync()
     else
         state = 3;
 
-    buf = bt_vendor_cbacks->alloc(14);
-    if( buf == NULL )
+    p_buf = (HC_BT_HDR*)vnd_cb->alloc(BT_HC_HDR_SIZE+2);
+    if( p_buf == NULL )
         return 1;
 
-    *(short*)&buf[0] = 8192;
-    *(short*)&buf[2] = 6;
-    *(short*)&buf[4] = 0;
-    *(short*)&buf[6] = 0;
-    buf[8]  = 40;
-    buf[9]  = -4;
-    buf[10] = 3;
-    buf[11] = 3;
-    buf[12] = 0;
-    buf[13] = state;
-    if( !bt_vendor_cbacks->xmit_cb(0xFC28, buf, NULL) )
+    p_buf->event          = MSG_STACK_TO_HC_HCI_CMD;
+    p_buf->len            = 6;
+    p_buf->offset         = 0;
+    p_buf->layer_specific = 0;
+    p_buf->data[0]        = 40;
+    p_buf->data[1]        = -4;
+    p_buf->data[2]        = 3;
+    p_buf->data[3]        = 3;
+    p_buf->data[4]        = 0;
+    p_buf->data[5]        = state;
+
+    if( !vnd_cb->xmit_cb(HCI_CMD_MARVELL_WRITE_PCM_SYNC_SETTINGS, p_buf, NULL) )
     {
-        bt_vendor_cbacks->dealloc(buf);
+        vnd_cb->dealloc(p_buf);
         return 1;
     }
     return 0;
@@ -115,28 +123,28 @@ int btsnd_hcic_set_pcm_mode()
 {
     char pcmmaster[PROP_VALUE_MAX];
     int state;
-    char *buf;
+    HC_BT_HDR *p_buf;
     property_get(BT_PCMMASTER_PROP, pcmmaster, "1");
     if( strcmp(pcmmaster, "0") == 0 )
         state = 0;
     else
         state = 2;
 
-    buf = bt_vendor_cbacks->alloc(12);
-    if( buf == NULL )
+    p_buf = (HC_BT_HDR*)vnd_cb->alloc(BT_HC_HDR_SIZE);
+    if( p_buf == NULL )
         return 1;
 
-    *(short*)&buf[0] = 8192;
-    *(short*)&buf[2] = 4;
-    *(short*)&buf[4] = 0;
-    *(short*)&buf[6] = 0;
-    buf[8]  = 7;
-    buf[9]  = -4;
-    buf[10] = 1;
-    buf[11] = state;
-    if( !bt_vendor_cbacks->xmit_cb(0xFC07, buf, NULL) )
+    p_buf->event          = MSG_STACK_TO_HC_HCI_CMD;
+    p_buf->len            = 4;
+    p_buf->offset         = 0;
+    p_buf->layer_specific = 0;
+    p_buf->data[0]        = 7;
+    p_buf->data[1]        = -4;
+    p_buf->data[2]        = 1;
+    p_buf->data[3]        = state;
+    if( !vnd_cb->xmit_cb(HCI_CMD_MARVELL_WRITE_PCM_SETTINGS, p_buf, NULL) )
     {
-        bt_vendor_cbacks->dealloc(buf);
+        vnd_cb->dealloc(p_buf);
         return 1;
     }
     return 0;
@@ -144,24 +152,25 @@ int btsnd_hcic_set_pcm_mode()
 
 int btsnd_hcic_set_pcm_link()
 {
-    char *buf;
+    HC_BT_HDR *p_buf;
 
-    buf = bt_vendor_cbacks->alloc(13);
-    if( buf == NULL )
+    p_buf = (HC_BT_HDR*)vnd_cb->alloc(BT_HC_HDR_SIZE+1);
+    if( p_buf == NULL )
         return 1;
 
-    *(short*)&buf[0] = 8192;
-    *(short*)&buf[2] = 5;
-    *(short*)&buf[4] = 0;
-    *(short*)&buf[6] = 0;
-    buf[8]  = 41;
-    buf[9]  = -4;
-    buf[10] = 2;
-    buf[11] = 4;
-    buf[12] = 0;
-    if( !bt_vendor_cbacks->xmit_cb(0xFC29, buf, NULL) )
+    p_buf->event          = MSG_STACK_TO_HC_HCI_CMD;
+    p_buf->len            = 5;
+    p_buf->offset         = 0;
+    p_buf->layer_specific = 0;
+    p_buf->data[0]        = 41;
+    p_buf->data[1]        = -4;
+    p_buf->data[2]        = 2;
+    p_buf->data[3]        = 4;
+    p_buf->data[4]        = 0;
+
+    if( !vnd_cb->xmit_cb(HCI_CMD_MARVELL_WRITE_PCM_LINK_SETTINGS, p_buf, NULL) )
     {
-        bt_vendor_cbacks->dealloc(buf);
+        vnd_cb->dealloc(p_buf);
         return 1;
     }
     return 0;
@@ -169,15 +178,16 @@ int btsnd_hcic_set_pcm_link()
 
 void bt_set_sco_codec_cback(void *param)
 {
-    char *buf = (char*)param;
-    if( buf[13] )
-    {
-        ALOGE("%s: Setting Codec Failed %d", __func__, buf[13]);
-    }
+    HC_BT_HDR* p_buf = (HC_BT_HDR*)param;
+    uint8_t res = p_buf->data[5];
+    uint16_t opcode;
+    if( res )
+        ALOGE("%s: Setting Codec Failed %d", __func__, res);
     else
     {
-        ALOGI("%s: OpCode 0x%04x Status %d", __func__, (short)(buf[11] + ((short)buf[12]<<8)), buf[13]);
-        bt_vendor_cbacks->dealloc(buf);
+        opcode = p_buf->data[3] | (p_buf->data[4]<<8);
+        ALOGI("%s: OpCode 0x%04x Status %d", __func__, opcode, res);
+        vnd_cb->dealloc(p_buf);
     }
 }
 
@@ -189,9 +199,9 @@ int bt_set_sco_codec_cmd(void *param)
     int ret = 0;
 
     ALOGI("%s: Handle %d, codec %d, state %d", __func__, iparam[0], codec, iparam[2]);
-    if( bt_vendor_cbacks != NULL )
+    if( vnd_cb != NULL )
     {
-        buf = bt_vendor_cbacks->alloc(12);
+        buf = vnd_cb->alloc(12);
         if( buf )
         {
             *(short*)&buf[0] = 8192;
@@ -202,13 +212,13 @@ int bt_set_sco_codec_cmd(void *param)
             buf[9]  = -4;
             buf[10] = 1;
             buf[11] = (codec - 2) <= 0;
-            ret = bt_vendor_cbacks->xmit_cb(0xFC73, buf, bt_set_sco_codec_cback);
+            ret = vnd_cb->xmit_cb(HCI_CMD_MARVELL_SET_SCO_DATA_CODEC, buf, bt_set_sco_codec_cback);
             if( ret )
                 return ret;
-            bt_vendor_cbacks->dealloc(buf);
+            vnd_cb->dealloc(buf);
         }
         ALOGI("%s: vendor lib postload aborted", __func__);
-        bt_vendor_cbacks->scocfg_cb(BT_VND_OP_RESULT_SUCCESS);
+        vnd_cb->scocfg_cb(BT_VND_OP_RESULT_SUCCESS);
     }
     return ret;
 }
@@ -223,35 +233,24 @@ static int bt_vnd_mrvl_if_init(const bt_vendor_callbacks_t* p_cb, unsigned char 
 {
     int i;
 
-    ALOGI("%s called", __func__);
-
-    bt_vendor_cbacks = (bt_vendor_callbacks_t*)p_cb;
-    if(local_bdaddr)
-        for(i=0;i<6;i++)
-            vnd_local_bd_addr[i] = local_bdaddr[i];
+    vnd_cb = (bt_vendor_callbacks_t*)p_cb;
+    memcpy(bdaddr, local_bdaddr, sizeof(bdaddr));
 
     ALOGI("%s: Local BD Address : %.2x:%.2x:%.2x:%.2x:%.2x:%.2x", __func__,
-                                                vnd_local_bd_addr[0],
-                                                vnd_local_bd_addr[1],
-                                                vnd_local_bd_addr[2],
-                                                vnd_local_bd_addr[3],
-                                                vnd_local_bd_addr[4],
-                                                vnd_local_bd_addr[5]);
+           bdaddr[0], bdaddr[1], bdaddr[2], bdaddr[3], bdaddr[4], bdaddr[5]);
     return 0;
 }
 
 /** Requested operations */
 static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
 {
-    ALOGI("%s: opcode = %d", __func__, opcode);
-
-    int *iparam = (int*)param;
+    int *power_state = (int*)param;
     int ret = 0;
     int retry = 1;
 
     switch( opcode )
     {
-        case BT_VND_OP_POWER_CTRL   : 
+        case BT_VND_OP_POWER_CTRL: 
             if( *iparam == BT_VND_PWR_ON )
             {
                 ALOGI("%s: power on", __func__);
@@ -262,7 +261,7 @@ static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
                     if( ret == 0 ) return 0;
                     ALOGI("%s: Fail to enable BT the [%d] time force power off", __func__, retry);
                 }
-                while( !mrvl_sd8xxx_force_poweroff() && retry++ != 3 );
+                while( !mrvl_sd8xxx_force_poweroff() && retry++ < 3 );
                 bluetooth_disable();
             }
             else if( *iparam == BT_VND_PWR_OFF )
@@ -276,14 +275,12 @@ static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
             }
             return ret;
 
-        case BT_VND_OP_FW_CFG       : 
-            if( bt_vendor_cbacks != NULL )
-            {
-                bt_vendor_cbacks->fwcfg_cb(0);
-            }
+        case BT_VND_OP_FW_CFG: 
+            if( vnd_cb != NULL )
+                vnd_cb->fwcfg_cb(0);
             break;
 
-        case BT_VND_OP_SCO_CFG      : 
+        case BT_VND_OP_SCO_CFG: 
             ret = btsnd_hcic_set_pcm_voice_path();
             if( ret == 0 )
             {
@@ -297,13 +294,13 @@ static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
                     }
                 }
             }
-            if( bt_vendor_cbacks != NULL )
-                bt_vendor_cbacks->scocfg_cb(ret);
+            if( vnd_cb != NULL )
+                vnd_cb->scocfg_cb(ret);
             break;
 
         case BT_VND_OP_USERIAL_OPEN : 
-            bt_sock = open(BT_DEV_PATH, O_RDWR);
-            if( bt_sock < 0 )
+            mchar_fd = open(BT_DEV_PATH, O_RDWR);
+            if( mchar_fd < 0 )
             {
                 ALOGE("%s: open %s failed error = %s", __func__, BT_DEV_PATH, strerror(errno));
                 ret = -1;
@@ -311,22 +308,22 @@ static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
             else
             {
                 ALOGI("%s: open %s successfully", __func__, BT_DEV_PATH);
-                iparam[0] = bt_sock;
-                iparam[1] = bt_sock;
-                iparam[2] = bt_sock;
-                iparam[3] = bt_sock;
+                iparam[0] = mchar_fd;
+                iparam[1] = mchar_fd;
+                iparam[2] = mchar_fd;
+                iparam[3] = mchar_fd;
                 ret = 1;
             }
             break;
 
         case BT_VND_OP_USERIAL_CLOSE: 
-            ioctl(bt_sock, 0x4D01, &ret);
+            ioctl(mchar_fd, 0x4D01, &ret);
             usleep(1000);
-            if( !bt_sock || close(bt_sock) == 0 )
+            if( !mchar_fd || close(mchar_fd) == 0 )
                 ret = 0;
             else
             {
-                ALOGE("%s: error while closing bt_sock: %s", __func__, strerror(errno));
+                ALOGE("%s: error while closing mchar_fd: %s", __func__, strerror(errno));
                 return -1;
             }
             break;
@@ -335,8 +332,8 @@ static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
             break;
 
         case BT_VND_OP_LPM_SET_MODE:
-            if( bt_vendor_cbacks != NULL )
-                bt_vendor_cbacks->lpm_cb(BT_VND_OP_RESULT_SUCCESS);
+            if( vnd_cb != NULL )
+                vnd_cb->lpm_cb(BT_VND_OP_RESULT_SUCCESS);
             break;
 
         case BT_VND_OP_LPM_WAKE_SET_STATE:
@@ -347,8 +344,8 @@ static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
             break;
 
         case BT_VND_OP_EPILOG:
-            if( bt_vendor_cbacks )
-                bt_vendor_cbacks->epilog_cb(BT_VND_OP_RESULT_SUCCESS);
+            if( vnd_cb )
+                vnd_cb->epilog_cb(BT_VND_OP_RESULT_SUCCESS);
             break;
 
         default: return -1;
@@ -360,6 +357,7 @@ static int bt_vnd_mrvl_if_op(bt_vendor_opcode_t opcode, void *param)
 /** Closes the interface */
 static void bt_vnd_mrvl_if_cleanup( void )
 {
+    return;
 }
 
 // Entry point of DLib
