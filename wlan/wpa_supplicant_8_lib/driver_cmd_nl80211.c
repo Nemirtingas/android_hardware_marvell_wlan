@@ -24,6 +24,12 @@
 
 #define os_strncpy strncpy
 
+/* Return type for setBand*/
+enum {
+	SEND_CHANNEL_CHANGE_EVENT = 0,
+	DO_NOT_SEND_CHANNEL_CHANGE_EVENT,
+};
+
 typedef struct android_wifi_priv_cmd {
     // Marvell's structure is 16bytes long
     union
@@ -257,6 +263,27 @@ nla_put_failure:
     return ret;
 }
 
+static void wpa_driver_notify_country_change(void *ctx, char *cmd)
+{
+    if ((os_strncasecmp(cmd, "COUNTRY", 7) == 0) ||
+        (os_strncasecmp(cmd, "SETBAND", 7) == 0)) {
+        union wpa_event_data event;
+
+        os_memset(&event, 0, sizeof(event));
+        event.channel_list_changed.initiator = REGDOM_SET_BY_USER;
+        if (os_strncasecmp(cmd, "COUNTRY", 7) == 0) {
+            event.channel_list_changed.type = REGDOM_TYPE_COUNTRY;
+            if (os_strlen(cmd) > 9) {
+                event.channel_list_changed.alpha2[0] = cmd[8];
+                event.channel_list_changed.alpha2[1] = cmd[9];
+            }
+        } else {
+            event.channel_list_changed.type = REGDOM_TYPE_UNKNOWN;
+        }
+        wpa_supplicant_event(ctx, EVENT_CHANNEL_LIST_CHANGED, &event);
+    }
+}
+
 int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf, size_t buf_len )
 {
     int ret = 0;
@@ -266,7 +293,7 @@ int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf, size_t buf_l
     android_wifi_priv_cmd priv_cmd;
 
     wpa_printf(MSG_DEBUG, "the nl80211 driver cmd is %s\n", cmd);
-        if (os_strcasecmp(cmd, "STOP") == 0) {
+    if (os_strcasecmp(cmd, "STOP") == 0) {
         linux_set_iface_flags(drv->global->ioctl_sock, bss->ifname, 0);
         wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "STOPPED");
     } else if (os_strcasecmp(cmd, "START") == 0) {
@@ -322,22 +349,26 @@ int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf, size_t buf_l
                 wpa_printf(MSG_ERROR, "the error is [%d]  [%s] \n", errno, strerror(errno));
             } else {
                 drv_errors = 0;
+			    if((os_strncasecmp(cmd, "SETBAND", 7) == 0) &&
+				    ret == DO_NOT_SEND_CHANNEL_CHANGE_EVENT) {
+				    return 0;
+			    }
                 ret = 0;
                 if ((os_strcasecmp(cmd, "LINKSPEED") == 0) ||
                     (os_strcasecmp(cmd, "RSSI") == 0) ||
                     (os_strcasecmp(cmd, "GETBAND") == 0) ||
-                    (os_strncasecmp(cmd, "WLS_BATCHING", 12)) == 0 )
+                    (os_strncasecmp(cmd, "WLS_BATCHING", 12)) == 0 ) {
                     ret = strlen(buf);
-                else if ((os_strcasecmp(cmd, "COUNTRY")) == 0 ||
-                         (os_strncasecmp(cmd, "SETBAND", 7)) == 0)
-                    wpa_supplicant_event(drv->ctx,
-                        EVENT_CHANNEL_LIST_CHANGED, NULL);
+                } else if ((os_strcasecmp(cmd, "COUNTRY")) == 0 ||
+                           (os_strncasecmp(cmd, "SETBAND", 7)) == 0) {
+                    //wpa_supplicant_event(drv->ctx, EVENT_CHANNEL_LIST_CHANGED, NULL);
+			        wpa_driver_notify_country_change(drv->ctx, cmd);
+                }
                 
                 wpa_printf(MSG_DEBUG, "%s %s len = %d, %d", __func__, buf, ret, strlen(buf));
             }
         }
     }
-    
 
     return ret;
 }
@@ -346,7 +377,6 @@ int wpa_driver_set_p2p_noa(void *priv, u8 count, int start, int duration)
 {
     char buf[MAX_DRV_CMD_SIZE];
     memset(buf, 0, sizeof(buf));
-    wpa_printf(MSG_DEBUG, "%s: Entry", __func__);
     snprintf(buf, sizeof(buf), "P2P_SET_NOA %d %d %d", count, start, duration);
     return wpa_driver_nl80211_driver_cmd(priv, buf, buf, strlen(buf)+1);
 }
@@ -362,7 +392,6 @@ int wpa_driver_set_p2p_ps(void *priv, int legacy_ps, int opp_ps, int ctwindow)
     char buf[MAX_DRV_CMD_SIZE];
 
     memset(buf, 0, sizeof(buf));
-    wpa_printf(MSG_DEBUG, "%s: Entry", __func__);
     snprintf(buf, sizeof(buf), "P2P_SET_PS %d %d %d", legacy_ps, opp_ps, ctwindow);
     return wpa_driver_nl80211_driver_cmd(priv, buf, buf, strlen(buf) + 1);
 }
@@ -394,14 +423,13 @@ int wpa_driver_set_ap_wps_p2p_ie(void *priv, const struct wpabuf *beacon,
 
     /* Marvell's implementation needs this
     buf = malloc(buf_len);
-    */
     if( buf == NULL )
     {
         wpa_printf(MSG_DEBUG, "%s: %s (%d)", __func__, strerror(errno), errno);
         return errno;
     }
+    */
 
-    wpa_printf(MSG_DEBUG, "%s: Entry", __func__);
     for (i = 0; cmd_arr[i].cmd != -1; i++) {
         /* Marvell's implementation needs this
         os_memset(buf, 0, sizeof(buf_len));
