@@ -1,5 +1,14 @@
-Here you will find some infos needed to build a wlan driver
+To build the Marvell driver, please remove the static qualifier from external/wpa_supplicant_8/wpa_supplicant/src/drivers/driver_nl80211.c, line approx 712:
+static int send_and_recv_msgs(struct wpa_driver_nl80211_data *drv,
+^^^^^^            struct nl_msg *msg,
+                  int (*valid_handler)(struct nl_msg *, void *),
+                  void *valid_data)
+{
+    return send_and_recv(drv->global, drv->global->nl, msg,
+                 valid_handler, valid_data);
+}
 
+Here you will find some infos needed to build a wlan driver
 
 #define ETH_ALEN 6
 #define IFNAMSIZ 16
