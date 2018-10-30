@@ -20,13 +20,162 @@
 #define WPA_PS_ENABLED  0
 #define WPA_PS_DISABLED 1
 
+#define MAX_WPSP2PIE_CMD_SIZE	512
+
+#define os_strncpy strncpy
+
 typedef struct android_wifi_priv_cmd {
-    char *buf;
+    // Marvell's structure is 16bytes long
+    union
+    {
+        char *buf;
+        char addr[8];
+    };
     int used_len;
     int total_len;
 } android_wifi_priv_cmd;
 
+int send_and_recv_msgs(struct wpa_driver_nl80211_data *drv, struct nl_msg *msg,
+		       int (*valid_handler)(struct nl_msg *, void *),
+               void *valid_data);
+
 static int drv_errors = 0;
+
+#ifndef HOSTAPD
+#define NL80211_BGSCAN_HEADER           "BGSCAN-CONFIG "
+#define NL80211_BGSCAN_HEADER_SIZE      14
+#define NL80211_SSID_AMOUNT             16
+#define NL80211_BGCAN_BUF_LEN           720
+#define NL80211_CSCAN_SSID_SECTION      'S'
+#define NL80211_SSID_MAX_SIZE           32
+#define NL80211_BGSCAN_RSSI_SECTION     'R'
+#define NL80211_BGSCAN_INTERVAL_SECTION 'T'
+#define NL80211_BGSCAN_INTERVAL_DEF     30
+#define NL80211_BGSCAN_REPEAT_SECTION   'E'
+#define NL80211_BGSCAN_REPEAT_DEF 5
+
+static char *getop(char *s, int *first_time)
+{
+	const char delim[] = " \t\n";
+	char *p;
+	if (*first_time){
+		p = strtok(s, delim);
+		*first_time = FALSE;
+	}
+	else{
+		p = strtok(NULL, delim);
+	}
+	return (p);
+}
+
+static int wpa_driver_set_backgroundscan_params(void *priv, char *cmd)
+{
+	struct i802_bss *bss = priv;
+	struct wpa_driver_nl80211_data *drv = bss->drv;
+	struct ifreq ifr;
+	android_wifi_priv_cmd priv_cmd;
+	struct wpa_supplicant *wpa_s;
+	int ret = 0, i = 0, bp;
+	char buf[NL80211_BGCAN_BUF_LEN];
+	struct wpa_ssid *ssid_conf;
+	int first_time = TRUE;
+	char    *opstr = NULL;
+	char  	*ptr = NULL;
+	int find_ssid = 0;
+	int find_interval = 0;
+	int find_repeat = 0;
+
+	if (drv == NULL) {
+		wpa_printf(MSG_ERROR, "%s: drv is NULL. Exiting", __func__);
+		return -1;
+	}
+	if (drv->ctx == NULL) {
+		wpa_printf(MSG_ERROR, "%s: drv->ctx is NULL. Exiting", __func__);
+		return -1;
+	}
+	wpa_s = (struct wpa_supplicant *)(drv->ctx);
+	if (wpa_s->conf == NULL) {
+		wpa_printf(MSG_ERROR, "%s: wpa_s->conf is NULL. Exiting", __func__);
+		return -1;
+	}
+	ssid_conf = wpa_s->conf->ssid;
+
+	bp = NL80211_BGSCAN_HEADER_SIZE;
+	os_memcpy(buf, NL80211_BGSCAN_HEADER, bp);
+
+	opstr = getop(cmd, &first_time);
+	while ((opstr = getop(cmd, &first_time)) != NULL) {
+		if((ptr = strstr(opstr, "SSID=")) != NULL) {
+			find_ssid = 1;
+			ptr = ptr + strlen("SSID=");
+			buf[bp++] = NL80211_CSCAN_SSID_SECTION;
+			buf[bp++] = strlen(ptr);
+			os_memcpy(&buf[bp], ptr, strlen(ptr));
+			bp += strlen(ptr);
+			i++;
+		}
+		else if((ptr = strstr(opstr, "RSSI=")) != NULL) {
+			ptr = ptr + strlen("RSSI=");
+			buf[bp++] = NL80211_BGSCAN_RSSI_SECTION;
+			buf[bp++] = atoi(ptr);
+		}
+		else if((ptr = strstr(opstr, "INTERVAL=")) != NULL) {
+			find_interval = 1;
+			ptr = ptr + strlen("INTERVAL=");
+			buf[bp++] = NL80211_BGSCAN_INTERVAL_SECTION;
+			buf[bp++] = (u8)atoi(ptr);
+			buf[bp++] = (u8)(atoi(ptr) >> 8);
+		}
+		else if((ptr = strstr(opstr, "REPEAT=")) != NULL) {
+			find_repeat = 1;
+			ptr = ptr + strlen("REPEAT=");
+			buf[bp++] = NL80211_BGSCAN_REPEAT_SECTION;
+			buf[bp++] = (u8)atoi(ptr);
+		}
+	}
+
+	if(!find_ssid) {
+		while ((i < NL80211_SSID_AMOUNT) && (ssid_conf != NULL)) {
+			if ((!ssid_conf->disabled) && (ssid_conf->ssid_len <= NL80211_SSID_MAX_SIZE)){
+				wpa_printf(MSG_DEBUG, "For BG Scan: %s", ssid_conf->ssid);
+				buf[bp++] = NL80211_CSCAN_SSID_SECTION;
+				buf[bp++] = ssid_conf->ssid_len;
+				os_memcpy(&buf[bp], ssid_conf->ssid, ssid_conf->ssid_len);
+				bp += ssid_conf->ssid_len;
+				i++;
+			}
+			ssid_conf = ssid_conf->next;
+		}
+	}
+
+	if(!find_interval){
+		buf[bp++] = NL80211_BGSCAN_INTERVAL_SECTION;
+		buf[bp++] = NL80211_BGSCAN_INTERVAL_DEF;
+		buf[bp++] = (NL80211_BGSCAN_INTERVAL_DEF >> 8);
+	}
+
+	if(!find_repeat){
+		buf[bp++] = NL80211_BGSCAN_REPEAT_SECTION;
+		buf[bp++] = NL80211_BGSCAN_REPEAT_DEF;
+	}
+
+	memset(&ifr, 0, sizeof(ifr));
+	memset(&priv_cmd, 0, sizeof(priv_cmd));
+	os_strncpy(ifr.ifr_name, bss->ifname, IFNAMSIZ);
+
+	priv_cmd.buf = buf;
+	priv_cmd.used_len = NL80211_BGCAN_BUF_LEN;
+	priv_cmd.total_len = NL80211_BGCAN_BUF_LEN;
+	ifr.ifr_data = &priv_cmd;
+
+	if ((ret = ioctl(drv->global->ioctl_sock, SIOCDEVPRIVATE + 14, &ifr)) < 0) {
+		wpa_printf(MSG_ERROR, "ioctl[SIOCSIWPRIV] (bgscan config): %d", ret);
+	} else {
+		wpa_printf(MSG_DEBUG, "%s %s len = %d, %d", __func__, buf, ret, strlen(buf));
+	}
+	return ret;
+}
+#endif
 
 static void wpa_driver_send_hang_msg(struct wpa_driver_nl80211_data *drv)
 {
@@ -116,7 +265,7 @@ int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf, size_t buf_l
     struct ifreq ifr;
     android_wifi_priv_cmd priv_cmd;
 
-    wpa_printf("the nl80211 driver cmd is %s\n", cmd);
+    wpa_printf(MSG_DEBUG, "the nl80211 driver cmd is %s\n", cmd);
         if (os_strcasecmp(cmd, "STOP") == 0) {
         linux_set_iface_flags(drv->global->ioctl_sock, bss->ifname, 0);
         wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "STOPPED");
@@ -124,11 +273,11 @@ int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf, size_t buf_l
         linux_set_iface_flags(drv->global->ioctl_sock, bss->ifname, 1);
         wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "STARTED");
     } else if (os_strcasecmp(cmd, "MACADDR") == 0) {
-        u8 macaddr[ETH_ALEN] = {};
-        ret = linux_get_ifhwaddr(drv->global->ioctl_sock, bss->ifname, macaddr);
+        memset(priv_cmd.addr, 0, 8);
+        ret = linux_get_ifhwaddr(drv->global->ioctl_sock, bss->ifname, priv_cmd.addr);
         if (!ret)
             ret = os_snprintf(buf, buf_len,
-                      "Macaddr = " MACSTR "\n", MAC2STR(macaddr));
+                      "Macaddr = " MACSTR "\n", MAC2STR(priv_cmd.addr));
     } else if (os_strcasecmp(cmd, "RELOAD") == 0) {
         wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "HANGED");
     } else if (os_strncasecmp(cmd, "POWERMODE ", 10) == 0) {
@@ -153,7 +302,7 @@ int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf, size_t buf_l
         // https://android.googlesource.com/platform/hardware/qcom/wlan/+/44892ad834705ca618cc6e6b224a1e9b222ed1c4/qcwcn/wpa_supplicant_8_lib/driver_cmd_nl80211.c
         if( os_strncasecmp(cmd, "BGSCAN-START", 12) == 0 )
         {
-            ret = wpa_driver_start_bgscan(bss, cmd);
+            ret = wpa_driver_set_backgroundscan_params(priv, cmd);
             if( ret < 0 )
                 wpa_printf(MSG_ERROR, "%s: failed to issue private command: BGSCAN-START\n", __func__);
         }
@@ -204,7 +353,6 @@ int wpa_driver_set_p2p_noa(void *priv, u8 count, int start, int duration)
 
 int wpa_driver_get_p2p_noa(void *priv, u8 *buf, size_t len)
 {
-    (void)priv,(void)buf,(void)len;
     /* Return 0 till we handle p2p_presence request completely in the driver */
     return 0;
 }
@@ -223,13 +371,17 @@ int wpa_driver_set_ap_wps_p2p_ie(void *priv, const struct wpabuf *beacon,
                  const struct wpabuf *proberesp,
                  const struct wpabuf *assocresp)
 {
-    char *buf;
     struct wpabuf *ap_wps_p2p_ie = NULL;
     char *_cmd = "SET_AP_WPS_P2P_IE";
     char *pbuf;
     int ret = 0;
     int i;
+    char buf[MAX_WPSP2PIE_CMD_SIZE];
+    /* Marvell's implementation needs this and removes the line before
+    char *buf;
     size_t buf_len = 512;
+    */
+
     struct cmd_desc {
         int cmd;
         const struct wpabuf *src;
@@ -240,7 +392,9 @@ int wpa_driver_set_ap_wps_p2p_ie(void *priv, const struct wpabuf *beacon,
         {-1, NULL}
     };
 
+    /* Marvell's implementation needs this
     buf = malloc(buf_len);
+    */
     if( buf == NULL )
     {
         wpa_printf(MSG_DEBUG, "%s: %s (%d)", __func__, strerror(errno), errno);
@@ -249,16 +403,19 @@ int wpa_driver_set_ap_wps_p2p_ie(void *priv, const struct wpabuf *beacon,
 
     wpa_printf(MSG_DEBUG, "%s: Entry", __func__);
     for (i = 0; cmd_arr[i].cmd != -1; i++) {
+        /* Marvell's implementation needs this
         os_memset(buf, 0, sizeof(buf_len));
+        */
+        os_memset(buf, 0, sizeof(buf));
         pbuf = buf;
         pbuf += sprintf(pbuf, "%s %d", _cmd, cmd_arr[i].cmd);
         *pbuf++ = '\0';
         ap_wps_p2p_ie = cmd_arr[i].src ?
             wpabuf_dup(cmd_arr[i].src) : NULL;
         if (ap_wps_p2p_ie) {
-            /* Marvell code, it ensures that the buffer is big enought to hold the cmd */
+            /* Marvell's code, it ensures that the buffer is big enought to hold the cmd */
             // If the space left is smaller than the space we will have to copy
-            if( (&buf[buf_len] - pbuf) < wpabuf_len(ap_wps_p2p_ie) )
+            /*if( (&buf[buf_len] - pbuf) < wpabuf_len(ap_wps_p2p_ie) )
             {
                 size_t old_len = pbuf - buf;
                 buf_len += wpabuf_len(ap_wps_p2p_ie) + 1;
@@ -274,7 +431,7 @@ int wpa_driver_set_ap_wps_p2p_ie(void *priv, const struct wpabuf *beacon,
                 pbuf = buf + old_len;
                 memset(pbuf, 0, buf_len - old_len);
                 wpa_printf(MSG_DEBUG, "Realloc WPS P2P IE buffer size to %u bytes", buf_len);
-            }
+            }*/
             /* End of Marvell code */
             os_memcpy(pbuf, wpabuf_head(ap_wps_p2p_ie), wpabuf_len(ap_wps_p2p_ie));
             ret = wpa_driver_nl80211_driver_cmd(priv, buf, buf,
@@ -285,6 +442,8 @@ int wpa_driver_set_ap_wps_p2p_ie(void *priv, const struct wpabuf *beacon,
         }
     }
 
+    /* Marvell's code
     free(buf);
+    */
     return ret;
 }
