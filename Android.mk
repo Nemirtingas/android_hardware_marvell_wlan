@@ -22,6 +22,7 @@ ifeq ($(TARGET_BOARD_SOC), pxa1908)
 pxa_dirs := MarvellWirelessDaemon
 pxa_dirs += libMarvellWireless
 pxa_dirs += wlan
+pxa_dirs += bt
 #pxa_dirs += libhardware_legacy
 
 include $(call all-named-subdir-makefiles,$(pxa_dirs))
