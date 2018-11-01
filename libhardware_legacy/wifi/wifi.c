@@ -467,6 +467,7 @@ int ensure_config_file_exists(const char *config_file)
             ALOGE("Cannot set RW to \"%s\": %s", config_file, strerror(errno));
             return -1;
         }
+        /*
         // Try to change permissions
         if( chmod(config_file, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) )
         {
@@ -479,6 +480,7 @@ int ensure_config_file_exists(const char *config_file)
             ALOGE("Error changing group ownership of %s to %d: %s", config_file, AID_WIFI, strerror(errno));
             return -1;
         }
+        */
         return 0;
     }
     else if( errno != ENOENT )
