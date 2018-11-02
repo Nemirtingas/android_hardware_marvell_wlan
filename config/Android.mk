@@ -14,9 +14,6 @@
 # limitations under the License.
 #
 
-# Disable this module for now
-ifeq (0,1)
-
 LOCAL_PATH := $(call my-dir)
 
 ########################
@@ -35,5 +32,3 @@ ifeq ($(strip $(WPA_SUPPLICANT_VERSION)),VER_0_8_X)
   include external/wpa_supplicant_8/wpa_supplicant/wpa_supplicant_conf.mk
 endif
 #######################
-
-endif
