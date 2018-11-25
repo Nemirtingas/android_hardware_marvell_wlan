@@ -1,103 +1,65 @@
+/*
+ * Copyright (C) 2014 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #include "wifi_hal.h"
 
 #ifndef __WIFI_HAL_COMMON_H__
 #define __WIFI_HAL_COMMON_H__
 
+#ifndef LOG_TAG
 #define LOG_TAG  "WifiHAL"
+#endif
+
+#include <stdint.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <netlink/genl/genl.h>
+#include <netlink/genl/family.h>
+#include <netlink/genl/ctrl.h>
+#include <linux/rtnetlink.h>
+#include <netpacket/packet.h>
+#include <linux/filter.h>
+#include <linux/errqueue.h>
+
+#include <linux/pkt_sched.h>
+#include <netlink/object-api.h>
+#include <netlink/netlink.h>
+#include <netlink/socket.h>
+#include <netlink-types.h>
+
+#include "nl80211_copy.h"
 
 #include <utils/Log.h>
-#include "nl80211_copy.h"
-#include "sync.h"
+#include "rb_wrapper.h"
+#include "pkt_stats.h"
+#include "wifihal_internal.h"
 
 #define SOCKET_BUFFER_SIZE      (32768U)
 #define RECV_BUF_SIZE           (4096)
 #define DEFAULT_EVENT_CB_SIZE   (64)
 #define DEFAULT_CMD_SIZE        (64)
-#define DOT11_OUI_LEN             3
+#define NUM_RING_BUFS           5
 
-/*
- Vendor OUI - This is a unique identifier that identifies organization. Lets
- code Android specific functions with Google OUI; although vendors can do more
- with their own OUI's as well.
- */
+#define MAC_ADDR_ARRAY(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
+#define MAC_ADDR_STR "%02x:%02x:%02x:%02x:%02x:%02x"
+#define BIT(x) (1 << (x))
 
-const uint32_t GOOGLE_OUI = 0x001A11;
-/* TODO: define vendor OUI here */
-
-
-/*
- This enum defines ranges for various commands; commands themselves
- can be defined in respective feature headers; i.e. find gscan command
- definitions in gscan.cpp
- */
-
-typedef enum {
-    /* don't use 0 as a valid subcommand */
-    VENDOR_NL80211_SUBCMD_UNSPECIFIED,
-
-    /* define all vendor startup commands between 0x0 and 0x0FFF */
-    VENDOR_NL80211_SUBCMD_RANGE_START = 0x0001,
-    VENDOR_NL80211_SUBCMD_RANGE_END   = 0x0FFF,
-
-    /* define all GScan related commands between 0x1000 and 0x10FF */
-    ANDROID_NL80211_SUBCMD_GSCAN_RANGE_START = 0x1000,
-    ANDROID_NL80211_SUBCMD_GSCAN_RANGE_END   = 0x10FF,
-
-    /* define all NearbyDiscovery related commands between 0x1100 and 0x11FF */
-    ANDROID_NL80211_SUBCMD_NBD_RANGE_START = 0x1100,
-    ANDROID_NL80211_SUBCMD_NBD_RANGE_END   = 0x11FF,
-
-    /* define all RTT related commands between 0x1100 and 0x11FF */
-    ANDROID_NL80211_SUBCMD_RTT_RANGE_START = 0x1100,
-    ANDROID_NL80211_SUBCMD_RTT_RANGE_END   = 0x11FF,
-
-    ANDROID_NL80211_SUBCMD_LSTATS_RANGE_START = 0x1200,
-    ANDROID_NL80211_SUBCMD_LSTATS_RANGE_END   = 0x12FF,
-
-    /* This is reserved for future usage */
-
-} ANDROID_VENDOR_SUB_COMMAND;
-
-typedef enum {
-
-    GSCAN_SUBCMD_GET_CAPABILITIES = ANDROID_NL80211_SUBCMD_GSCAN_RANGE_START,
-
-    GSCAN_SUBCMD_SET_CONFIG,                            /* 0x1001 */
-
-    GSCAN_SUBCMD_SET_SCAN_CONFIG,                       /* 0x1002 */
-    GSCAN_SUBCMD_ENABLE_GSCAN,                          /* 0x1003 */
-    GSCAN_SUBCMD_GET_SCAN_RESULTS,                      /* 0x1004 */
-    GSCAN_SUBCMD_SCAN_RESULTS,                          /* 0x1005 */
-
-    GSCAN_SUBCMD_SET_HOTLIST,                           /* 0x1006 */
-
-    GSCAN_SUBCMD_SET_SIGNIFICANT_CHANGE_CONFIG,         /* 0x1007 */
-    GSCAN_SUBCMD_ENABLE_FULL_SCAN_RESULTS,              /* 0x1008 */
-    GSCAN_SUBCMD_GET_CHANNEL_LIST,                       /* 0x1009 */
-
-    WIFI_SUBCMD_GET_FEATURE_SET,                         /* 0x100A */
-    WIFI_SUBCMD_GET_FEATURE_SET_MATRIX,                  /* 0x100B */
-    WIFI_SUBCMD_SET_PNO_RANDOM_MAC_OUI,                  /* 0x100C */
-    WIFI_SUBCMD_NODFS_SET,                               /* 0x100D */
-
-    /* Add more sub commands here */
-
-    GSCAN_SUBCMD_MAX                                    /* 0x100D */
-
-} WIFI_SUB_COMMAND;
-
-typedef enum {
-    BRCM_RESERVED1,
-    BRCM_RESERVED2,
-    GSCAN_EVENT_SIGNIFICANT_CHANGE_RESULTS ,
-    GSCAN_EVENT_HOTLIST_RESULTS_FOUND,
-    GSCAN_EVENT_SCAN_RESULTS_AVAILABLE,
-    GSCAN_EVENT_FULL_SCAN_RESULTS,
-    RTT_EVENT_COMPLETE,
-    GSCAN_EVENT_COMPLETE_SCAN,
-    GSCAN_EVENT_HOTLIST_RESULTS_LOST
-} WIFI_EVENT;
+typedef int16_t s16;
+typedef int32_t s32;
+typedef int64_t s64;
 
 typedef void (*wifi_internal_event_handler) (wifi_handle handle, int events);
 
@@ -118,14 +80,17 @@ typedef struct {
 
 typedef struct {
     wifi_handle handle;                             // handle to wifi data
-    char name[8+1];                                 // interface name + trailing null
+    char name[IFNAMSIZ+1];                          // interface name + trailing null
     int  id;                                        // id to use when talking to driver
 } interface_info;
 
-typedef struct {
+struct gscan_event_handlers_s;
+
+typedef struct hal_info_s {
 
     struct nl_sock *cmd_sock;                       // command socket object
     struct nl_sock *event_sock;                     // event socket object
+    struct nl_sock *user_sock;                      // user socket object
     int nl80211_family_id;                          // family id for 80211 driver
 
     bool in_event_loop;                             // Indicates that event loop is active
@@ -146,8 +111,28 @@ typedef struct {
     interface_info **interfaces;                    // array of interfaces
     int num_interfaces;                             // number of interfaces
 
-
+    feature_set supported_feature_set;
     // add other details
+    int user_sock_arg;
+    struct rb_info rb_infos[NUM_RING_BUFS];
+    void (*on_ring_buffer_data) (char *ring_name, char *buffer, int buffer_size,
+          wifi_ring_buffer_status *status);
+    void (*on_alert) (wifi_request_id id, char *buffer, int buffer_size, int err_code);
+    struct pkt_stats_s *pkt_stats;
+
+    /* socket pair used to exit from blocking poll*/
+    int exit_sockets[2];
+    u32 rx_buf_size_allocated;
+    u32 rx_buf_size_occupied;
+    wifi_ring_buffer_entry *rx_aggr_pkts;
+    rx_aggr_stats aggr_stats;
+    u32 prev_seq_no;
+    // pointer to structure having various gscan_event_handlers
+    struct gscan_event_handlers_s *gscan_handlers;
+    /* mutex for the log_handler access*/
+    pthread_mutex_t lh_lock;
+    /* mutex for the alert_handler access*/
+    pthread_mutex_t ah_lock;
 } hal_info;
 
 wifi_error wifi_register_handler(wifi_handle handle, int cmd, nl_recvmsg_msg_cb_t func, void *arg);
@@ -159,7 +144,6 @@ void wifi_unregister_vendor_handler(wifi_handle handle, uint32_t id, int subcmd)
 
 wifi_error wifi_register_cmd(wifi_handle handle, int id, WifiCommand *cmd);
 WifiCommand *wifi_unregister_cmd(wifi_handle handle, int id);
-WifiCommand *wifi_get_cmd(wifi_handle handle, int id);
 void wifi_unregister_cmd(wifi_handle handle, WifiCommand *cmd);
 
 interface_info *getIfaceInfo(wifi_interface_handle);
@@ -168,12 +152,36 @@ hal_info *getHalInfo(wifi_handle handle);
 hal_info *getHalInfo(wifi_interface_handle handle);
 wifi_handle getWifiHandle(hal_info *info);
 wifi_interface_handle getIfaceHandle(interface_info *info);
+wifi_error initializeGscanHandlers(hal_info *info);
+wifi_error cleanupGscanHandlers(hal_info *info);
 
+lowi_cb_table_t *getLowiCallbackTable(u32 requested_lowi_capabilities);
 
+wifi_error wifi_start_sending_offloaded_packet(wifi_request_id id,
+        wifi_interface_handle iface, u8 *ip_packet, u16 ip_packet_len,
+        u8 *src_mac_addr, u8 *dst_mac_addr, u32 period_msec);
+wifi_error wifi_stop_sending_offloaded_packet(wifi_request_id id,
+        wifi_interface_handle iface);
+wifi_error wifi_start_rssi_monitoring(wifi_request_id id, wifi_interface_handle
+        iface, s8 max_rssi, s8 min_rssi, wifi_rssi_event_handler eh);
+wifi_error wifi_stop_rssi_monitoring(wifi_request_id id, wifi_interface_handle iface);
 // some common macros
 
 #define min(x, y)       ((x) < (y) ? (x) : (y))
 #define max(x, y)       ((x) > (y) ? (x) : (y))
+
+#define REQUEST_ID_MAX 1000
+#define get_requestid() ((arc4random()%REQUEST_ID_MAX) + 1)
+#define WAIT_TIME_FOR_SET_REG_DOMAIN 50000
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif /* __cplusplus */
+void hexdump(void *bytes, u16 len);
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
 
 #endif
 
