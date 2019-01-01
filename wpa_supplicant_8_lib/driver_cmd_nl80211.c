@@ -29,11 +29,6 @@
 #define WPA_PS_ENABLED		0
 #define WPA_PS_DISABLED		1
 
-#ifndef NL_AUTO_PORT
-// This is not correctly defined in some versions
-#define NL_AUTO_PORT 0
-#endif // NL_AUTO_PORT
-
 #define os_strncpy strncpy
 
 /* Return type for setBand*/
