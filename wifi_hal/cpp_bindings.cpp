@@ -38,7 +38,7 @@
 #include "wifi_hal.h"
 #include "common.h"
 #include "cpp_bindings.h"
-#include "qca-vendor.h"
+#include "vendor_definitions.h"
 
 void appendFmt(char *buf, size_t buf_len, int &offset, const char *fmt, ...)
 {
@@ -498,8 +498,6 @@ void WifiEvent::log() {
 
     byte *data = (byte *)genlmsg_attrdata(mHeader, 0);
     int len = genlmsg_attrlen(mHeader, 0);
-    ALOGD("cmd = %s, len = %d", get_cmdString(), len);
-    ALOGD("vendor_id = %04x, vendor_subcmd = %d", get_vendor_id(), get_vendor_subcmd());
 
     for (int i = 0; i < len; i += 16) {
         char line[81];
@@ -526,16 +524,8 @@ void WifiEvent::log() {
             }
         }
 
-        ALOGD("%s", line);
     }
 
-    for (unsigned i = 0; i < NL80211_ATTR_MAX_INTERNAL; i++) {
-        if (mAttributes[i] != NULL) {
-            ALOGD("found attribute %s", attributeToString(i));
-        }
-    }
-
-    ALOGD("-- End of message --");
 }
 
 const char *WifiEvent::get_cmdString() {
@@ -551,7 +541,6 @@ int WifiEvent::parse() {
     int result = nla_parse(mAttributes, NL80211_ATTR_MAX_INTERNAL, genlmsg_attrdata(mHeader, 0),
           genlmsg_attrlen(mHeader, 0), NULL);
 
-    // ALOGD("event len = %d", nlmsg_hdr(mMsg)->nlmsg_len);
     return result;
 }
 
@@ -634,12 +623,11 @@ int WifiCommand::requestResponse(WifiRequest& request) {
     }
 out:
     nl_cb_put(cb);
+    mMsg.destroy();
     return err;
 }
 
 int WifiCommand::requestEvent(int cmd) {
-
-    ALOGD("requesting event %d", cmd);
 
     int res = wifi_register_handler(wifiHandle(), cmd, event_handler, this);
     if (res < 0) {
@@ -650,13 +638,10 @@ int WifiCommand::requestEvent(int cmd) {
     if (res < 0)
         goto out;
 
-    ALOGD("waiting for response %d", cmd);
-
     res = nl_send_auto_complete(mInfo->cmd_sock, mMsg.getMessage());    /* send message */
     if (res < 0)
         goto out;
 
-    ALOGD("waiting for event %d", cmd);
     res = mCondition.wait();
     if (res < 0)
         goto out;
@@ -692,7 +677,6 @@ out:
 
 /* Event handlers */
 int WifiCommand::response_handler(struct nl_msg *msg, void *arg) {
-    // ALOGD("response_handler called");
     WifiCommand *cmd = (WifiCommand *)arg;
     WifiEvent reply(msg);
     int res = reply.parse();
@@ -722,21 +706,18 @@ int WifiCommand::event_handler(struct nl_msg *msg, void *arg) {
 
 /* Other event handlers */
 int WifiCommand::valid_handler(struct nl_msg *msg, void *arg) {
-    // ALOGD("valid_handler called");
      int *err = (int *)arg;
     *err = 0;
     return NL_SKIP;
 }
 
 int WifiCommand::ack_handler(struct nl_msg *msg, void *arg) {
-    // ALOGD("ack_handler called");
     int *err = (int *)arg;
     *err = 0;
     return NL_STOP;
 }
 
 int WifiCommand::finish_handler(struct nl_msg *msg, void *arg) {
-    // ALOGD("finish_handler called");
     int *ret = (int *)arg;
     *ret = 0;
     return NL_SKIP;
@@ -746,7 +727,6 @@ int WifiCommand::error_handler(struct sockaddr_nl *nla, struct nlmsgerr *err, vo
     int *ret = (int *)arg;
     *ret = err->error;
 
-    // ALOGD("error_handler received : %d", err->error);
     return NL_SKIP;
 }
 
@@ -764,7 +744,7 @@ WifiVendorCommand::WifiVendorCommand(wifi_handle handle,
 
 WifiVendorCommand::~WifiVendorCommand()
 {
-    ALOGV("~WifiVendorCommand %p destroyed", this);
+    //ALOGV("~WifiVendorCommand %p destroyed", this);
     //mVendorData is not destroyed here. Assumption
     //is that VendorData is specific to each Vendor and they
     //are responsible for owning the same.
@@ -774,20 +754,13 @@ WifiVendorCommand::~WifiVendorCommand()
 // in the corresponding object
 int WifiVendorCommand::handleResponse(WifiEvent &reply)
 {
-#ifdef QC_HAL_DEBUG
-    ALOGI("WifiVendorCommand::handleResponse");
-#endif
     struct nlattr **tb = reply.attributes();
-    struct nlattr *attr = NULL;
     struct genlmsghdr *gnlh = reply.header();
 
     if (gnlh->cmd == NL80211_CMD_VENDOR) {
         if (tb[NL80211_ATTR_VENDOR_DATA]) {
             mVendorData = (char *)nla_data(tb[NL80211_ATTR_VENDOR_DATA]);
             mDataLen = nla_len(tb[NL80211_ATTR_VENDOR_DATA]);
-#ifdef QC_HAL_DEBUG
-            ALOGD("%s: Vendor data len received:%d", __FUNCTION__, mDataLen);
-#endif
         }
     }
     return NL_SKIP;
@@ -797,11 +770,7 @@ int WifiVendorCommand::handleResponse(WifiEvent &reply)
 // save it in the object
 int WifiVendorCommand::handleEvent(WifiEvent &event)
 {
-#ifdef QC_HAL_DEBUG
-    ALOGI("WifiVendorCommand::handleEvent");
-#endif
     struct nlattr **tb = event.attributes();
-    struct nlattr *attr = NULL;
     struct genlmsghdr *gnlh = event.header();
 
     if (gnlh->cmd == NL80211_CMD_VENDOR) {
@@ -813,18 +782,14 @@ int WifiVendorCommand::handleEvent(WifiEvent &event)
         mVendor_id = nla_get_u32(tb[NL80211_ATTR_VENDOR_ID]);
         mSubcmd = nla_get_u32(tb[NL80211_ATTR_VENDOR_SUBCMD]);
 
-#ifdef QC_HAL_DEBUG
-        ALOGD("%s: Vendor event: vendor_id=0x%x subcmd=%u",
+        ALOGV("%s: Vendor event: vendor_id=0x%x subcmd=%u",
               __FUNCTION__, mVendor_id, mSubcmd);
-#endif
 
         if (tb[NL80211_ATTR_VENDOR_DATA]) {
             mVendorData = (char *)nla_data(tb[NL80211_ATTR_VENDOR_DATA]);
             mDataLen = nla_len(tb[NL80211_ATTR_VENDOR_DATA]);
-#ifdef QC_HAL_DEBUG
-            ALOGD("%s: Vendor data len received:%d", __FUNCTION__, mDataLen);
+            ALOGV("%s: Vendor data len received:%d", __FUNCTION__, mDataLen);
             hexdump(mVendorData, mDataLen);
-#endif
         }
     }
     return NL_SKIP;
@@ -860,7 +825,6 @@ out:
 
 int WifiVendorCommand::requestResponse()
 {
-    ALOGD("%s: request a response", __FUNCTION__);
     return WifiCommand::requestResponse(mMsg);
 }
 
@@ -994,8 +958,14 @@ wifi_error WifiVendorCommand::get_mac_addr(struct nlattr **tb_vendor,
         return WIFI_ERROR_INVALID_ARGS;
     }
 
+    if (nla_len(tb_vendor[attribute]) != sizeof(mac_addr)) {
+        ALOGE("Invalid mac addr lenght\n");
+        return WIFI_ERROR_INVALID_ARGS;
+    }
+
     memcpy(addr, (u8 *)nla_data(tb_vendor[attribute]),
-                  nla_len(tb_vendor[attribute]));
+                 nla_len(tb_vendor[attribute]));
+
     return WIFI_SUCCESS;
 }
 

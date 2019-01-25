@@ -25,6 +25,7 @@
 
 #include <stdint.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <sys/socket.h>
 #include <netlink/genl/genl.h>
 #include <netlink/genl/family.h>
@@ -85,6 +86,7 @@ typedef struct {
 } interface_info;
 
 struct gscan_event_handlers_s;
+struct rssi_monitor_event_handler_s;
 
 typedef struct hal_info_s {
 
@@ -133,6 +135,12 @@ typedef struct hal_info_s {
     pthread_mutex_t lh_lock;
     /* mutex for the alert_handler access*/
     pthread_mutex_t ah_lock;
+    u32 firmware_bus_max_size;
+    bool fate_monitoring_enabled;
+    packet_fate_monitor_info *pkt_fate_stats;
+    /* mutex for the packet fate stats shared resource protection */
+    pthread_mutex_t pkt_fate_stats_lock;
+    struct rssi_monitor_event_handler_s *rssi_handlers;
 } hal_info;
 
 wifi_error wifi_register_handler(wifi_handle handle, int cmd, nl_recvmsg_msg_cb_t func, void *arg);
@@ -154,6 +162,8 @@ wifi_handle getWifiHandle(hal_info *info);
 wifi_interface_handle getIfaceHandle(interface_info *info);
 wifi_error initializeGscanHandlers(hal_info *info);
 wifi_error cleanupGscanHandlers(hal_info *info);
+wifi_error initializeRSSIMonitorHandler(hal_info *info);
+wifi_error cleanupRSSIMonitorHandler(hal_info *info);
 
 lowi_cb_table_t *getLowiCallbackTable(u32 requested_lowi_capabilities);
 
@@ -179,6 +189,7 @@ extern "C"
 {
 #endif /* __cplusplus */
 void hexdump(void *bytes, u16 len);
+u8 get_rssi(u8 rssi_wo_noise_floor);
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */

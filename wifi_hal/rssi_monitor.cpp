@@ -36,23 +36,90 @@
 #include "common.h"
 #include "cpp_bindings.h"
 #include "rssi_monitor.h"
-#include "qca-vendor.h"
 #include "vendor_definitions.h"
 
-//Singleton Static Instance
-RSSIMonitorCommand* RSSIMonitorCommand::mRSSIMonitorCommandInstance = NULL;
+/* Used to handle rssi command events from driver/firmware.*/
+typedef struct rssi_monitor_event_handler_s {
+    RSSIMonitorCommand* mRSSIMonitorCommandInstance;
+} rssi_monitor_event_handlers;
+
+wifi_error initializeRSSIMonitorHandler(hal_info *info)
+{
+    info->rssi_handlers = (rssi_monitor_event_handlers *)malloc(sizeof(
+                              rssi_monitor_event_handlers));
+    if (info->rssi_handlers) {
+        memset(info->rssi_handlers, 0, sizeof(rssi_monitor_event_handlers));
+    }
+    else {
+        ALOGE("%s: Allocation of RSSI event handlers failed",
+              __FUNCTION__);
+        return WIFI_ERROR_OUT_OF_MEMORY;
+    }
+    return WIFI_SUCCESS;
+}
+
+wifi_error cleanupRSSIMonitorHandler(hal_info *info)
+{
+    rssi_monitor_event_handlers* event_handlers;
+    if (info && info->rssi_handlers) {
+        event_handlers = (rssi_monitor_event_handlers*) info->rssi_handlers;
+        if (event_handlers->mRSSIMonitorCommandInstance) {
+            delete event_handlers->mRSSIMonitorCommandInstance;
+        }
+        memset(event_handlers, 0, sizeof(rssi_monitor_event_handlers));
+        return WIFI_SUCCESS;
+    }
+    ALOGE ("%s: info or info->rssi_handlers NULL", __FUNCTION__);
+    return WIFI_ERROR_UNKNOWN;
+}
+
+void RSSIMonitorCommand::enableEventHandling()
+{
+    pthread_mutex_lock(&rm_lock);
+    mEventHandlingEnabled = true;
+    pthread_mutex_unlock(&rm_lock);
+}
+
+void RSSIMonitorCommand::disableEventHandling()
+{
+    pthread_mutex_lock(&rm_lock);
+    mEventHandlingEnabled = false;
+    pthread_mutex_unlock(&rm_lock);
+}
+
+bool RSSIMonitorCommand::isEventHandlingEnabled()
+{
+    bool eventHandlingEnabled;
+    pthread_mutex_lock(&rm_lock);
+    eventHandlingEnabled = mEventHandlingEnabled;
+    pthread_mutex_unlock(&rm_lock);
+
+    return eventHandlingEnabled;
+}
+
+void RSSIMonitorCommand::setCallbackHandler(wifi_rssi_event_handler handler)
+{
+    mHandler = handler;
+}
 
 RSSIMonitorCommand::RSSIMonitorCommand(wifi_handle handle, int id,
                                        u32 vendor_id, u32 subcmd)
         : WifiVendorCommand(handle, id, vendor_id, subcmd)
 {
-    mRSSIMonitorCommandInstance = NULL;
     memset(&mHandler, 0, sizeof(mHandler));
+    if (registerVendorHandler(vendor_id, subcmd)) {
+        /* Error case should not happen print log */
+        ALOGE("%s: Unable to register Vendor Handler Vendor Id=0x%x subcmd=%u",
+              __FUNCTION__, vendor_id, subcmd);
+    }
+    pthread_mutex_init(&rm_lock, NULL);
+    disableEventHandling();
 }
 
 RSSIMonitorCommand::~RSSIMonitorCommand()
 {
-    mRSSIMonitorCommandInstance = NULL;
+    unregisterVendorHandler(mVendor_id, mSubcmd);
+    pthread_mutex_destroy(&rm_lock);
 }
 
 void RSSIMonitorCommand::setReqId(wifi_request_id reqid)
@@ -67,10 +134,20 @@ RSSIMonitorCommand* RSSIMonitorCommand::instance(wifi_handle handle,
         ALOGE("Interface Handle is invalid");
         return NULL;
     }
+    hal_info *info = getHalInfo(handle);
+    if (!info || !info->rssi_handlers) {
+        ALOGE("rssi_handlers is invalid");
+        return NULL;
+    }
+
+    RSSIMonitorCommand* mRSSIMonitorCommandInstance =
+        info->rssi_handlers->mRSSIMonitorCommandInstance;
+
     if (mRSSIMonitorCommandInstance == NULL) {
         mRSSIMonitorCommandInstance = new RSSIMonitorCommand(handle, id,
                 OUI_QCA,
                 QCA_NL80211_VENDOR_SUBCMD_MONITOR_RSSI);
+        info->rssi_handlers->mRSSIMonitorCommandInstance = mRSSIMonitorCommandInstance;
         return mRSSIMonitorCommandInstance;
     }
     else
@@ -79,7 +156,7 @@ RSSIMonitorCommand* RSSIMonitorCommand::instance(wifi_handle handle,
         {
             /* upper layer must have cleaned up the handle and reinitialized,
                so we need to update the same */
-            ALOGI("Handle different, update the handle");
+            ALOGV("Handle different, update the handle");
             mRSSIMonitorCommandInstance->mInfo = (hal_info *)handle;
         }
         mRSSIMonitorCommandInstance->setReqId(id);
@@ -93,6 +170,13 @@ RSSIMonitorCommand* RSSIMonitorCommand::instance(wifi_handle handle,
 int RSSIMonitorCommand::handleEvent(WifiEvent &event)
 {
     int ret = WIFI_SUCCESS;
+
+    if (isEventHandlingEnabled() == false) {
+        ALOGE("%s: RSSI monitor isn't running or already stopped. "
+              "Nothing to do. Exit", __FUNCTION__);
+        return ret;
+    }
+
     WifiVendorCommand::handleEvent(event);
 
     /* Parse the vendordata and get the attribute */
@@ -111,8 +195,6 @@ int RSSIMonitorCommand::handleEvent(WifiEvent &event)
 
             memset(addr, 0, sizeof(mac_addr));
 
-            ALOGI("QCA_NL80211_VENDOR_SUBCMD_MONITOR_RSSI Received");
-
             if (!tb_vendor[
                 QCA_WLAN_VENDOR_ATTR_RSSI_MONITORING_REQUEST_ID])
             {
@@ -128,7 +210,7 @@ int RSSIMonitorCommand::handleEvent(WifiEvent &event)
              *  request_id value which we're maintaining.
              */
             if (reqId != id()) {
-                ALOGD("%s: Event has Req. ID:%d <> Ours:%d, continue...",
+                ALOGV("%s: Event has Req. ID:%d <> Ours:%d, continue...",
                     __FUNCTION__, reqId, id());
                 reqId = id();
             }
@@ -138,7 +220,7 @@ int RSSIMonitorCommand::handleEvent(WifiEvent &event)
             if (ret != WIFI_SUCCESS) {
                 return ret;
             }
-            ALOGI(MAC_ADDR_STR, MAC_ADDR_ARRAY(addr));
+            ALOGV(MAC_ADDR_STR, MAC_ADDR_ARRAY(addr));
 
             if (!tb_vendor[QCA_WLAN_VENDOR_ATTR_RSSI_MONITORING_CUR_RSSI])
             {
@@ -148,7 +230,7 @@ int RSSIMonitorCommand::handleEvent(WifiEvent &event)
             }
             rssi = get_s8(tb_vendor[
                         QCA_WLAN_VENDOR_ATTR_RSSI_MONITORING_CUR_RSSI]);
-            ALOGI("Current RSSI : %d ", rssi);
+            ALOGV("Current RSSI : %d ", rssi);
 
             if (mHandler.on_rssi_threshold_breached)
                 (*mHandler.on_rssi_threshold_breached)(reqId, addr, rssi);
@@ -162,27 +244,7 @@ int RSSIMonitorCommand::handleEvent(WifiEvent &event)
             ALOGE("%s: Wrong subcmd received %d", __FUNCTION__, mSubcmd);
     }
 
-    return NL_SKIP;
-}
-
-int RSSIMonitorCommand::setCallbackHandler(wifi_rssi_event_handler nHandler,
-                                           u32 event)
-{
-    int ret;
-    mHandler = nHandler;
-    ret = registerVendorHandler(mVendor_id, event);
-    if (ret != 0) {
-        /* Error case should not happen print log */
-        ALOGE("%s: Unable to register Vendor Handler Vendor Id=0x%x subcmd=%u",
-              __FUNCTION__, mVendor_id, mSubcmd);
-    }
     return ret;
-}
-
-wifi_error RSSIMonitorCommand::unregisterHandler(u32 subCmd)
-{
-    unregisterVendorHandler(mVendor_id, subCmd);
-    return WIFI_SUCCESS;
 }
 
 wifi_error wifi_start_rssi_monitoring(wifi_request_id id,
@@ -205,7 +267,7 @@ wifi_error wifi_start_rssi_monitoring(wifi_request_id id,
         return (wifi_error)ret;
     }
 
-    ALOGI("%s: Max RSSI:%d Min RSSI:%d", __FUNCTION__,
+    ALOGV("%s: Max RSSI:%d Min RSSI:%d", __FUNCTION__,
           max_rssi, min_rssi);
     /* Add the vendor specific attributes for the NL command. */
     nlData = vCommand->attr_start(NL80211_ATTR_VENDOR_DATA);
@@ -236,14 +298,13 @@ wifi_error wifi_start_rssi_monitoring(wifi_request_id id,
         return WIFI_ERROR_OUT_OF_MEMORY;
     }
 
-    ret = rssiCommand->setCallbackHandler(eh,
-            QCA_NL80211_VENDOR_SUBCMD_MONITOR_RSSI);
-    if (ret < 0)
-        goto cleanup;
+    rssiCommand->setCallbackHandler(eh);
 
     ret = vCommand->requestResponse();
     if (ret < 0)
         goto cleanup;
+
+    rssiCommand->enableEventHandling();
 
 cleanup:
     delete vCommand;
@@ -258,6 +319,18 @@ wifi_error wifi_stop_rssi_monitoring(wifi_request_id id,
     WifiVendorCommand *vCommand = NULL;
     wifi_handle wifiHandle = getWifiHandle(iface);
     RSSIMonitorCommand *rssiCommand;
+    rssi_monitor_event_handlers* event_handlers;
+    hal_info *info = getHalInfo(wifiHandle);
+
+    event_handlers = (rssi_monitor_event_handlers*)info->rssi_handlers;
+    rssiCommand = event_handlers->mRSSIMonitorCommandInstance;
+
+    if (rssiCommand == NULL ||
+        rssiCommand->isEventHandlingEnabled() == false) {
+        ALOGE("%s: RSSI monitor isn't running or already stopped. "
+            "Nothing to do. Exit", __FUNCTION__);
+        return WIFI_ERROR_NOT_AVAILABLE;
+    }
 
     ret = initialize_vendor_cmd(iface, id,
                                 QCA_NL80211_VENDOR_SUBCMD_MONITOR_RSSI,
@@ -288,19 +361,8 @@ wifi_error wifi_stop_rssi_monitoring(wifi_request_id id,
     if (ret < 0)
         goto cleanup;
 
-    rssiCommand = RSSIMonitorCommand::instance(wifiHandle, id);
-    if (rssiCommand == NULL) {
-        ALOGE("%s: Error rssiCommand NULL", __FUNCTION__);
-        ret = WIFI_ERROR_OUT_OF_MEMORY;
-        goto cleanup;
-    }
+    rssiCommand->disableEventHandling();
 
-    ret = rssiCommand->unregisterHandler(
-                                        QCA_NL80211_VENDOR_SUBCMD_MONITOR_RSSI);
-    if (ret != WIFI_SUCCESS)
-        goto cleanup;
-
-    delete rssiCommand;
 
 cleanup:
     delete vCommand;
