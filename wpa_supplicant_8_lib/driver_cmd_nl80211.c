@@ -99,6 +99,7 @@ int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf,
 
 		if ((ret = ioctl(drv->global->ioctl_sock, SIOCDEVPRIVATE + 14, &ifr)) < 0) {
 			wpa_printf(MSG_ERROR, "%s: failed to issue private commands\n", __func__);
+            wpa_printf(MSG_ERROR, "%s: %s", __func__, cmd);
 		} else {
 			drv_errors = 0;
 			if((os_strncasecmp(cmd, "SETBAND", 7) == 0) &&
